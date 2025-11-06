@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wrp"
+version = "0.0.0"
+description = "WRP server/runtime (WIP)"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["."]
