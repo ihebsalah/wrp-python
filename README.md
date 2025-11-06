@@ -87,4 +87,4 @@ python examples/ai_engineer_server.py
 Work-in-progress. This repo is being pushed early; active development continues.
 
 ## License
-MIT — see LICENSE.
+© 2025 Iheb Salah — Licensed under MIT. — see LICENSE.
