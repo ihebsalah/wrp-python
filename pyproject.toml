@@ -9,13 +9,13 @@ name = "wrp-python"
 version = "0.1.0a1" # alpha/WIP tag so expectations are clear
 description = "WRP server/runtime (WIP)"
 readme = "README.md"
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 authors = [{ name = "Iheb Salah" }]
 requires-python = ">=3.10"
 urls = { "Source" = "https://github.com/ihebsalah/wrp-python" }
 classifiers = [
   "Programming Language :: Python :: 3",
-  "License :: OSI Approved :: MIT License",
+  "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent",
   "Development Status :: 3 - Alpha",
 ]
@@ -25,3 +25,4 @@ include = ["wrp", "wrp.*"]
 
 [tool.setuptools]
 include-package-data = true
+license-files = ["LICENSE", "NOTICE", "TRADEMARKS.md", "authors"]

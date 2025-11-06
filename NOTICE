@@ -1,6 +1,7 @@
-WRP (Python)
+WRP (Python) — Reference Implementation
 Copyright (c) 2025 Iheb Salah
 
-This project is licensed under the MIT License (see LICENSE).
-Redistributions must retain the above copyright notice and this permission notice.
-This distribution may include dependencies under their own licenses.
+This product includes software developed by Iheb Salah.
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Project: https://github.com/ihebsalah/wrp-python
