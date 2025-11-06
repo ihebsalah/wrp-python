@@ -1,4 +1,9 @@
-# WRP (Python)
+# README.md
+
+# WRP (Python) — 🚧 WORK IN PROGRESS
+
+> **Status:** Early architecture drop to showcase the Project.  
+> Full package/docs will land in the next few weeks.
 
 Server/runtime for a workflow & telemetry system with:
 - pluggable Stores (memory / SQLite / Postgres)
@@ -7,16 +12,18 @@ Server/runtime for a workflow & telemetry system with:
 - workflow manager with per-workflow settings + persistence
 
 ## Layout
+```
 wrp-python/
-wrp/ # Python package: client/server/shared
-
-bash
-Copy code
+  wrp/                # Python package: client / server / shared
+  examples/
+    ai_engineer_server.py
+  tests/
+```
 
 ## Quick start
 ```bash
 python -m pip install -e .
-```bash
+```
 
-Status
-Work-in-progress. Pushing early to showcase architecture & complexity.
+## Status
+Work-in-progress. This repo is being pushed early; active development continues.

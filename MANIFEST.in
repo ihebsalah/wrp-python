@@ -1,0 +1,1 @@
+recursive-include wrp/server/runtime/store/sql *.sql
