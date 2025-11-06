@@ -1,12 +1,23 @@
+# pyproject.toml
+
 [build-system]
 requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "wrp"
-version = "0.0.0"
+name = "wrp-python"
+version = "0.1.0"
 description = "WRP server/runtime (WIP)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Your Name" }]
 requires-python = ">=3.10"
+urls = { "Source" = "https://github.com/<your-username>/wrp-python" }
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
 
 [tool.setuptools.packages.find]
-where = ["."]
+include = ["wrp*"]

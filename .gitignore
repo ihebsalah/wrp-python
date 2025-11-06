@@ -18,6 +18,18 @@ venv/
 .DS_Store
 Thumbs.db
 
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Coverage
+.coverage
+htmlcov/
+
+# Logs
+*.log
+
 # App data
 wrp_data/
 *.sqlite
