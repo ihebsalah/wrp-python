@@ -1,4 +1,3 @@
-# README.md
 # WRP (Python) — 🚧 WORK IN PROGRESS
 
 > **Status:** Early architecture drop to showcase the Project.  
