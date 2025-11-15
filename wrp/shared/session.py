@@ -12,7 +12,7 @@ from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStre
 from pydantic import BaseModel
 from typing_extensions import Self
 
-from mcp.shared.message import MessageMetadata, ServerMessageMetadata, SessionMessage
+from wrp.shared.message import MessageMetadata, ServerMessageMetadata, SessionMessage
 
 from wrp.shared.exceptions import WrpError
 from wrp.types import (
@@ -412,7 +412,7 @@ class BaseSession(
                             logging.warning(
                                 f"Failed to validate notification: {e}. Message was: {message.message.root}"
                             )
-                    else:  # Response or error
+                    elif isinstance(message.message.root, (JSONRPCResponse, JSONRPCError)):  # Response or error
                         stream = self._response_streams.pop(message.message.root.id, None)
                         if stream:
                             await stream.send(message.message.root)
@@ -420,6 +420,9 @@ class BaseSession(
                             await self._handle_incoming(
                                 RuntimeError(f"Received response with an unknown request ID: {message}")
                             )
+                    else:
+                        raise RuntimeError(f"Unknown JSON-RPC message type: {type(message.message.root)}")
+
 
             except anyio.ClosedResourceError:
                 # This is expected when the client disconnects abruptly.

@@ -37,8 +37,7 @@ import anyio.lowlevel
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from pydantic import AnyUrl
 
-from mcp.shared.message import ServerMessageMetadata, SessionMessage
-
+from wrp.shared.message import ServerMessageMetadata, SessionMessage
 import wrp.types as types
 from wrp.shared.session import BaseSession, RequestResponder
 from wrp.server.models import InitializationOptions

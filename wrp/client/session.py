@@ -8,8 +8,7 @@ from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStre
 from jsonschema import SchemaError, ValidationError, validate
 from pydantic import AnyUrl, TypeAdapter
 
-from mcp.shared.message import ServerMessageMetadata, SessionMessage
-
+from wrp.shared.message import ServerMessageMetadata, SessionMessage
 import wrp.types as types
 from wrp.shared.context import RequestContext
 from wrp.shared.session import BaseSession, ProgressFnT, RequestResponder

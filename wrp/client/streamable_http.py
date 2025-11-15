@@ -19,8 +19,7 @@ from anyio.abc import TaskGroup
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from httpx_sse import EventSource, ServerSentEvent, aconnect_sse
 
-from mcp.shared.message import ClientMessageMetadata, SessionMessage
-
+from wrp.shared.message import ClientMessageMetadata, SessionMessage
 from wrp.shared._httpx_utils import WrpHttpClientFactory, create_wrp_http_client
 from wrp.types import (
     ErrorData,
