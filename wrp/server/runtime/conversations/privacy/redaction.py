@@ -3,12 +3,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional
 from weakref import WeakKeyDictionary
+from copy import deepcopy
 
 from wrp.server.runtime.telemetry.privacy.redaction import (
     apply_rules,
     _PATTERNS as _BASE_PATTERNS,
     _compile_custom_patterns,
 )
+
+from ..types import SanitizedChannelItem
 from .policy import ConversationResourcePolicy, Visibility
 
 
@@ -39,7 +42,7 @@ def _sanitize_payload(
     Return (sanitized_payload, did_redact).
     """
     did = False
-    data = payload
+    data = deepcopy(payload)
 
     # overlays for redacted mode
     role_rules = policy.rules_by_role.get(role) if role else None
@@ -78,16 +81,15 @@ def _sanitize_payload(
 def sanitize_conversation_items(
     items: Iterable[Any],
     policy: ConversationResourcePolicy,
-) -> List[Dict[str, Any]]:
+) -> List[SanitizedChannelItem]:
     """
-    Sanitize a sequence of conversation items into a json-friendly list of dicts.
+    Sanitize a sequence of conversation items into a list of SanitizedChannelItem instances.
     Items are duck-typed and expected to have `payload`, `channel`, and `ts` attributes.
-    The output format for each item is:
-      { "payload": <sanitized>, "channel": <str>, "ts": <iso>, "redacted": <bool> }
+    The SanitizedChannelItem type handles final JSON serialization.
 
     Private messages are dropped entirely.
     """
-    out: List[Dict[str, Any]] = []
+    out: List[SanitizedChannelItem] = []
     registry = _registry_for(policy)
 
     for it in items:
@@ -109,12 +111,12 @@ def sanitize_conversation_items(
         )
 
         out.append(
-            {
-                "payload": sanitized,
-                "channel": it.channel,
-                "ts": it.ts.isoformat(),
-                "redacted": bool(did or vis == "redacted"),
-            }
+            SanitizedChannelItem(
+                payload=sanitized,
+                channel=it.channel,
+                ts=it.ts,
+                redacted=bool(did or vis == "redacted"),
+            )
         )
 
     return out

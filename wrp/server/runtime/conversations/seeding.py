@@ -26,7 +26,7 @@ def default_conversation_seeding() -> ConversationSeeding:
 
 # ---- Run filter (v0) ---------------------------------------------------------
 
-class RunFilter(BaseModel):
+class SeedingRunFilter(BaseModel):
     """Select which prior runs contribute to the seed."""
     include_runs: list[str] | None = None
     since_run_id: str | None = None     # exclusive
@@ -56,12 +56,10 @@ class WorkflowConversationSeeding(BaseModel):
     Author-controlled constraints for cross-run seeding and channel access.
     Enforced by the server regardless of caller meta.
 
-    - deny_seeding: hard-disable cross-run seeding (forces ConversationSeedingNone and ignores run_filter)
+    - deny_seeding: hard-disable cross-run seeding (forces ConversationSeedingNone and ignores seeding_run_filter)
     - default_seeding: used ONLY when caller does not provide a conversation_seeding
-    - default_channels: used by ConversationsService.get() when no channels are supplied by the workflow author
-    - allowed_channels: if set, 'channels' is intersected with this set
+    - allowed_channels: if set, cross-run seeding is only performed for channels in this set
     """
     deny_seeding: bool = False
     default_seeding: ConversationSeeding = Field(default_factory=ConversationSeedingNone)
-    default_channels: list[str] = Field(default_factory=lambda: ["default"])
     allowed_channels: set[str] | None = None

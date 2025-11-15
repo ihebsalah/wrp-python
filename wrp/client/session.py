@@ -1,7 +1,7 @@
 # wrp/client/session.py
 import logging
 from datetime import timedelta
-from typing import Any, Protocol
+from typing import Any, Optional, Protocol
 
 import anyio.lowlevel
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
@@ -252,6 +252,293 @@ class ClientSession(
             types.EmptyResult,
         )
 
+    # -------- System Events: client helpers ----------
+    def _build_events_selectors(
+        self,
+        *,
+        system_session_id: str | None,
+        run_id: str | None,
+        span_id: str | None,
+        channel: str | None,
+    ) -> tuple[
+        types.RunsScope | None,
+        types.SpanScope | None,
+        types.ChannelScope | None,
+        types.SystemSessionScope | None,
+    ]:
+        """Build scope objects from IDs for system event subscriptions."""
+        if span_id is not None:
+            if not (system_session_id and run_id):
+                raise ValueError("span subscription requires system_session_id and run_id")
+            return (
+                None,
+                types.SpanScope(system_session_id=system_session_id, run_id=run_id, span_id=span_id),
+                None,
+                None,
+            )
+        if channel is not None:
+            if not (system_session_id and run_id):
+                raise ValueError("channel subscription requires system_session_id and run_id")
+            return (
+                None,
+                None,
+                types.ChannelScope(
+                    system_session_id=system_session_id, run_id=run_id, channel=channel
+                ),
+                None,
+            )
+        if run_id is not None:
+            if not system_session_id:
+                raise ValueError("runs subscription requires system_session_id")
+            return (types.RunsScope(system_session_id=system_session_id, run_id=run_id), None, None, None)
+        if system_session_id is not None:
+            return (None, None, None, types.SystemSessionScope(system_session_id=system_session_id))
+        return (None, None, None, None)
+
+    async def system_events_subscribe(
+        self,
+        *,
+        topic: types.Topic,
+        system_session_id: str | None = None,
+        run_id: str | None = None,
+        span_id: str | None = None,
+        channel: str | None = None,
+        deliver_initial: bool | None = None,
+        coalesce_ms: int | None = None,
+    ) -> types.SystemEventsSubscribeResult:
+        """Send a system/events/subscribe request with convenient selectors."""
+        runs, span, ch, sess = self._build_events_selectors(
+            system_session_id=system_session_id, run_id=run_id, span_id=span_id, channel=channel
+        )
+        options = None
+        if deliver_initial is not None or coalesce_ms is not None:
+            options = types.SubscribeOptions(deliverInitial=deliver_initial, coalesceMs=coalesce_ms)
+        params = types.SystemEventsSubscribeParams(
+            topic=topic, runs=runs, span=span, channel=ch, session=sess, options=options
+        )
+        return await self.send_request(
+            types.ClientRequest(types.SystemEventsSubscribeRequest(params=params)),
+            types.SystemEventsSubscribeResult,
+        )
+
+    async def system_events_unsubscribe(
+        self,
+        *,
+        subscription_id: str | None = None,
+        topic: types.Topic | None = None,
+        system_session_id: str | None = None,
+        run_id: str | None = None,
+        span_id: str | None = None,
+        channel: str | None = None,
+    ) -> types.EmptyResult:
+        """Send a system/events/unsubscribe request with convenient selectors."""
+        runs, span, ch, sess = self._build_events_selectors(
+            system_session_id=system_session_id, run_id=run_id, span_id=span_id, channel=channel
+        )
+        if not subscription_id and not topic and not any([runs, span, ch, sess]):
+            raise ValueError("unsubscribe requires subscription_id or (topic + selector/global)")
+        params = types.SystemEventsUnsubscribeParams(
+            subscriptionId=subscription_id, topic=topic, runs=runs, span=span, channel=ch, session=sess
+        )
+        return await self.send_request(
+            types.ClientRequest(types.SystemEventsUnsubscribeRequest(params=params)),
+            types.EmptyResult,
+        )
+
+    # -------- System handlers: reads ----------
+    async def runs_list(
+        self,
+        *,
+        system_session_id: str,
+        workflow: str | None = None,
+        thread_id: str | None = None,
+        state: types.RunState | None = None,
+        outcome: types.RunOutcome | None = None,
+    ) -> types.RunsListResult:
+        """Send a runs/list request with optional filters."""
+        params = types.RunsListRequestParams(
+            system_session=types.SystemSessionScope(system_session_id=system_session_id),
+            workflow=workflow,
+            thread_id=thread_id,
+            state=state,
+            outcome=outcome,
+        )
+        return await self.send_request(
+            types.ClientRequest(types.RunsListRequest(params=params)),
+            types.RunsListResult,
+        )
+
+    async def runs_read(self, *, system_session_id: str, run_id: str) -> types.RunsReadResult:
+        """Send a runs/read request for a specific run."""
+        runs = types.RunsScope(system_session_id=system_session_id, run_id=run_id)
+        params = types.RunsReadRequestParams(runs=runs)
+        return await self.send_request(
+            types.ClientRequest(types.RunsReadRequest(params=params)),
+            types.RunsReadResult,
+        )
+
+    async def runs_input_read(self, *, system_session_id: str, run_id: str) -> types.RunsIOReadResult:
+        """Send a runs/input/read request."""
+        runs = types.RunsScope(system_session_id=system_session_id, run_id=run_id)
+        return await self.send_request(
+            types.ClientRequest(types.RunsInputReadRequest(params=types.RunsIOReadRequestParams(runs=runs))),
+            types.RunsIOReadResult,
+        )
+
+    async def runs_output_read(self, *, system_session_id: str, run_id: str) -> types.RunsIOReadResult:
+        """Send a runs/output/read request."""
+        runs = types.RunsScope(system_session_id=system_session_id, run_id=run_id)
+        return await self.send_request(
+            types.ClientRequest(types.RunsOutputReadRequest(params=types.RunsIOReadRequestParams(runs=runs))),
+            types.RunsIOReadResult,
+        )
+
+    async def telemetry_spans_list(self, *, system_session_id: str, run_id: str) -> types.TelemetrySpansListResult:
+        """Send a telemetry/spans/list request."""
+        runs = types.RunsScope(system_session_id=system_session_id, run_id=run_id)
+        return await self.send_request(
+            types.ClientRequest(
+                types.TelemetrySpansListRequest(params=types.TelemetrySpansListRequestParams(runs=runs))
+            ),
+            types.TelemetrySpansListResult,
+        )
+
+    async def telemetry_span_read(
+        self, *, system_session_id: str, run_id: str, span_id: str
+    ) -> types.TelemetrySpanReadResult:
+        """Send a telemetry/span/read request."""
+        span = types.SpanScope(system_session_id=system_session_id, run_id=run_id, span_id=span_id)
+        return await self.send_request(
+            types.ClientRequest(types.TelemetrySpanReadRequest(params=types.TelemetrySpanReadRequestParams(span=span))),
+            types.TelemetrySpanReadResult,
+        )
+
+    async def telemetry_payload_read(
+        self, *, system_session_id: str, run_id: str, span_id: str
+    ) -> types.TelemetryPayloadReadResult:
+        """Send a telemetry/payload/read request."""
+        span = types.SpanScope(system_session_id=system_session_id, run_id=run_id, span_id=span_id)
+        return await self.send_request(
+            types.ClientRequest(
+                types.TelemetryPayloadReadRequest(params=types.TelemetryPayloadReadRequestParams(span=span))
+            ),
+            types.TelemetryPayloadReadResult,
+        )
+
+    async def conversations_channels_list(
+        self,
+        *,
+        system_session_id: str,
+        run_id: str,
+    ) -> types.ChannelsListResult:
+        """Send a conversations/channels/list request."""
+        runs = types.RunsScope(system_session_id=system_session_id, run_id=run_id)
+        return await self.send_request(
+            types.ClientRequest(
+                types.ChannelsListRequest(
+                    params=types.ChannelsListRequestParams(runs=runs)
+                )
+            ),
+            types.ChannelsListResult,
+        )
+
+    async def conversations_channel_read(
+        self,
+        *,
+        system_session_id: str,
+        run_id: str,
+        channel: str,
+    ) -> types.ChannelReadResult:
+        """Send a conversations/channel/read request."""
+        scope = types.ChannelScope(
+            system_session_id=system_session_id,
+            run_id=run_id,
+            channel=channel,
+        )
+        return await self.send_request(
+            types.ClientRequest(
+                types.ChannelReadRequest(
+                    params=types.ChannelReadRequestParams(channel=scope)
+                )
+            ),
+            types.ChannelReadResult,
+        )
+
+    async def system_sessions_list(self) -> types.SystemSessionsListResult:
+        """Send a system/sessions/list request."""
+        return await self.send_request(
+            types.ClientRequest(types.SystemSessionsListRequest()),
+            types.SystemSessionsListResult,
+        )
+
+    async def system_session_read(self, *, system_session_id: str) -> types.SystemSessionReadResult:
+        """Send a system/session/read request."""
+        scope = types.SystemSessionScope(system_session_id=system_session_id)
+        return await self.send_request(
+            types.ClientRequest(
+                types.SystemSessionReadRequest(params=types.SystemSessionReadRequestParams(session=scope))
+            ),
+            types.SystemSessionReadResult,
+        )
+
+    # -------- Provider settings (WRP) ----------
+    async def provider_settings_read(self, provider: str) -> types.ProviderSettingsReadResult:
+        """Read effective settings for a provider."""
+        params = types.ProviderSettingsReadRequestParams(provider=provider)
+        return await self.send_request(
+            types.ClientRequest(types.ProviderSettingsReadRequest(params=params)),
+            types.ProviderSettingsReadResult,
+        )
+
+    async def provider_settings_schema(self, provider: str) -> types.ProviderSettingsSchemaResult:
+        """Fetch JSON schema for a provider's settings model."""
+        params = types.ProviderSettingsSchemaRequestParams(provider=provider)
+        return await self.send_request(
+            types.ClientRequest(types.ProviderSettingsSchemaRequest(params=params)),
+            types.ProviderSettingsSchemaResult,
+        )
+
+    async def provider_settings_update(
+        self,
+        provider: str,
+        values: dict[str, Any],
+    ) -> types.ProviderSettingsReadResult:
+        """Merge/update provider settings."""
+        params = types.ProviderSettingsUpdateRequestParams(provider=provider, values=values)
+        return await self.send_request(
+            types.ClientRequest(types.ProviderSettingsUpdateRequest(params=params)),
+            types.ProviderSettingsReadResult,
+        )
+
+    # -------- Agent settings (WRP) ----------
+    async def agent_settings_read(self, agent: str) -> types.AgentSettingsReadResult:
+        """Read effective settings for an agent."""
+        params = types.AgentSettingsReadRequestParams(agent=agent)
+        return await self.send_request(
+            types.ClientRequest(types.AgentSettingsReadRequest(params=params)),
+            types.AgentSettingsReadResult,
+        )
+
+    async def agent_settings_schema(self, agent: str) -> types.AgentSettingsSchemaResult:
+        """Fetch JSON schema for an agent's settings model."""
+        params = types.AgentSettingsSchemaRequestParams(agent=agent)
+        return await self.send_request(
+            types.ClientRequest(types.AgentSettingsSchemaRequest(params=params)),
+            types.AgentSettingsSchemaResult,
+        )
+
+    async def agent_settings_update(
+        self,
+        agent: str,
+        values: dict[str, Any],
+    ) -> types.AgentSettingsReadResult:
+        """Merge/update agent settings."""
+        params = types.AgentSettingsUpdateRequestParams(agent=agent, values=values)
+        return await self.send_request(
+            types.ClientRequest(types.AgentSettingsUpdateRequest(params=params)),
+            types.AgentSettingsReadResult,
+        )
+
     async def list_workflows(self) -> types.ListWorkflowsResult:
         """Send a workflows/list request (WRP)."""
         result = await self.send_request(
@@ -277,8 +564,8 @@ class ClientSession(
         # New: WRP run options (any of these may be provided)
         wrp_thread: str | None = None,
         wrp_conversation_seeding: dict[str, Any] | str | None = None,  # e.g. {"kind":"window","messages":20} or "none"
-        wrp_run_filter: dict[str, Any] | None = None,            # e.g. {"since_run_id":"005", ...}
-        wrp_request_context: dict[str, Any] | None = None,       # full override for request_context if you prefer
+        wrp_seeding_run_filter: dict[str, Any] | None = None,  # e.g. {"since_run_id":"005", ...}
+        wrp_request_context: dict[str, Any] | None = None,  # full override for request_context if you prefer
     ) -> types.RunWorkflowResult:
         """Send a workflows/run request (WRP) with optional client-side validation."""
         if validate_io:
@@ -297,14 +584,14 @@ class ClientSession(
         # Build request_context for the server to parse (if any run option was provided
         # or a full override dict is supplied).
         request_context: dict[str, Any] | None = wrp_request_context
-        if request_context is None and any([wrp_thread, wrp_conversation_seeding, wrp_run_filter]):
+        if request_context is None and any([wrp_thread, wrp_conversation_seeding, wrp_seeding_run_filter]):
             wrp_ns: dict[str, Any] = {}
             if wrp_thread is not None:
                 wrp_ns["thread"] = wrp_thread
             if wrp_conversation_seeding is not None:
                 wrp_ns["conversation_seeding"] = wrp_conversation_seeding
-            if wrp_run_filter is not None:
-                wrp_ns["run_filter"] = wrp_run_filter
+            if wrp_seeding_run_filter is not None:
+                wrp_ns["seeding_run_filter"] = wrp_seeding_run_filter
             request_context = {"wrp": wrp_ns}
 
         metadata = ServerMessageMetadata(request_context=request_context) if request_context else None
@@ -378,5 +665,8 @@ class ClientSession(
                 # Invalidate caches so next call refreshes
                 self._workflow_input_schemas.clear()
                 self._workflow_output_schemas.clear()
+            case types.SystemEventsUpdatedNotification():
+                # Handled by message_handler via _handle_incoming; no-op here
+                pass
             case _:
                 pass

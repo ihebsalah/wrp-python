@@ -5,6 +5,14 @@ from typing import Annotated, Any, Generic, Literal, TypeAlias, TypeVar
 from pydantic import BaseModel, ConfigDict, Field, FileUrl, RootModel
 from pydantic.networks import AnyUrl, UrlConstraints
 from wrp.server.runtime.workflows.types import WorkflowDescriptor, RunWorkflowResult
+from wrp.server.runtime.runs.types import RunMeta, RunOutcome, RunState
+from wrp.server.runtime.conversations.types import (
+    ChannelMeta,
+    ChannelView,
+)
+from wrp.server.runtime.system_sessions.types import SystemSession
+from wrp.server.runtime.telemetry.events import TelemetrySpanView
+from wrp.server.runtime.telemetry.payloads.types import SpanPayloadEnvelope
 
 """
 Workflow Runtime Protocol bindings for Python
@@ -13,7 +21,7 @@ Workflow Runtime Protocol bindings for Python
 LATEST_PROTOCOL_VERSION = "2025-11-01"
 
 """
-The default negotiated version of the Workflow Runtime Protocol when no version is specified.
+The default negotiated version of a Workflow Runtime Protocol when no version is specified.
 We need this to satisfy the WRP specification, which requires the server to assume a
 specific version if none is provided by the client.
 """
@@ -261,17 +269,118 @@ class ResourcesCapability(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class WorkflowSettingsCapability(BaseModel):
+    """Flags for reading/updating workflow settings + schema."""
+
+    read: bool | None = None  # resource://workflows/{wf}/settings
+    update: bool | None = None  # HTTP PUT /workflows/{wf}/settings
+    schema: bool | None = None  # resource://workflows/{wf}/settings/schema
+    model_config = ConfigDict(extra="allow")
+
+
 class WorkflowsCapability(BaseModel):
     """Capability for workflow operations."""
 
     listChanged: bool | None = None
     """Whether this server supports notifications for changes to the workflow list."""
+    settings: WorkflowSettingsCapability | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class ProviderSettingsCapability(BaseModel):
+    """Flags for reading/updating provider settings + schema."""
+
+    read: bool | None = None  # providers/settings/read
+    update: bool | None = None  # providers/settings/update
+    schema: bool | None = None  # providers/settings/schema
+    model_config = ConfigDict(extra="allow")
+
+
+class ProvidersCapability(BaseModel):
+    """Capability for provider operations (global, non-run)."""
+
+    settings: ProviderSettingsCapability | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class AgentSettingsCapability(BaseModel):
+    """Flags for reading/updating agent settings + schema."""
+
+    read: bool | None = None  # agents/settings/read
+    update: bool | None = None  # agents/settings/update
+    schema: bool | None = None  # agents/settings/schema
+    model_config = ConfigDict(extra="allow")
+
+
+class AgentsCapability(BaseModel):
+    """Capability for agent operations (global, provider-aware)."""
+
+    settings: AgentSettingsCapability | None = None
     model_config = ConfigDict(extra="allow")
 
 
 class LoggingCapability(BaseModel):
     """Capability for logging operations."""
 
+    model_config = ConfigDict(extra="allow")
+
+
+class SystemSessionsCapability(BaseModel):
+    """Capability for system sessions handlers (+ subscribe)."""
+
+    list: bool | None = None  # systemSessions/list
+    read: bool | None = None  # systemSessions/read
+    subscribe: bool | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class RunsIOCapability(BaseModel):
+    read: bool | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class RunsCapability(BaseModel):
+    """Capability for run input/output handlers (+ subscribe)."""
+
+    list: bool | None = None  # runs/list
+    read: bool | None = None  # runs/read
+    input: RunsIOCapability | None = None  # runs/input/read
+    output: RunsIOCapability | None = None  # runs/output/read
+    subscribe: bool | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class TelemetrySpansCapability(BaseModel):
+    list: bool | None = None  # .../telemetry/spans
+    read: bool | None = None  # .../telemetry/spans/{span_id}
+    model_config = ConfigDict(extra="allow")
+
+
+class TelemetryPayloadsCapability(BaseModel):
+    read: bool | None = None  # .../telemetry/spans/{span_id}/payload
+    model_config = ConfigDict(extra="allow")
+
+
+class TelemetryCapability(BaseModel):
+    """Capability for telemetry handlers (+ subscribe)."""
+
+    spans: TelemetrySpansCapability | None = None
+    payloads: TelemetryPayloadsCapability | None = None
+    subscribe: bool | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class ChannelsCapability(BaseModel):
+    list: bool | None = None  # .../conversations/channels/list
+    read: bool | None = None  # .../conversations/channel/read/{channel}
+    model_config = ConfigDict(extra="allow")
+
+
+class ConversationsCapability(BaseModel):
+    """Capability for conversations handlers (+ subscribe)."""
+
+    channels: ChannelsCapability | None = None
+    subscribe: bool | None = None
     model_config = ConfigDict(extra="allow")
 
 
@@ -286,6 +395,18 @@ class ServerCapabilities(BaseModel):
     """Present if the server offers any resources to read."""
     workflows: WorkflowsCapability | None = None
     """Present if the server offers any workflows to run."""
+    systemSessions: SystemSessionsCapability | None = None
+    """Present if the server supports system sessions handlers."""
+    runs: RunsCapability | None = None
+    """Present if the server supports run input/output handlers."""
+    telemetry: TelemetryCapability | None = None
+    """Present if the server supports telemetry handlers."""
+    conversations: ConversationsCapability | None = None
+    """Present if the server supports conversation handlers."""
+    providers: ProvidersCapability | None = None
+    """Present if the server exposes provider-level settings APIs."""
+    agents: AgentsCapability | None = None
+    """Present if the server exposes agent-level settings APIs."""
     model_config = ConfigDict(extra="allow")
 
 
@@ -625,6 +746,58 @@ class RunWorkflowRequest(Request[RunWorkflowRequestParams, Literal["workflows/ru
     params: RunWorkflowRequestParams
 
 
+#
+# Workflow Settings API (lowlevel-defined)
+#
+
+
+class WorkflowSettingsReadRequestParams(RequestParams):
+    """Parameters for workflows/settings/read."""
+
+    workflow: str
+    model_config = ConfigDict(extra="allow")
+
+
+class WorkflowSettingsReadRequest(Request[WorkflowSettingsReadRequestParams, Literal["workflows/settings/read"]]):
+    """Read the effective (possibly persisted/overridden) settings for a workflow."""
+
+    method: Literal["workflows/settings/read"] = "workflows/settings/read"
+    params: WorkflowSettingsReadRequestParams
+
+
+class WorkflowSettingsSchemaRequestParams(RequestParams):
+    """Parameters for workflows/settings/schema."""
+
+    workflow: str
+    model_config = ConfigDict(extra="allow")
+
+
+class WorkflowSettingsSchemaRequest(
+    Request[WorkflowSettingsSchemaRequestParams, Literal["workflows/settings/schema"]]
+):
+    """Read the JSON schema for a workflow's settings."""
+
+    method: Literal["workflows/settings/schema"] = "workflows/settings/schema"
+    params: WorkflowSettingsSchemaRequestParams
+
+
+class WorkflowSettingsUpdateRequestParams(RequestParams):
+    """Parameters for workflows/settings/update (partial upsert)."""
+
+    workflow: str
+    values: dict[str, Any] | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class WorkflowSettingsUpdateRequest(
+    Request[WorkflowSettingsUpdateRequestParams, Literal["workflows/settings/update"]]
+):
+    """Update (merge) the workflow's settings."""
+
+    method: Literal["workflows/settings/update"] = "workflows/settings/update"
+    params: WorkflowSettingsUpdateRequestParams
+
+
 class WorkflowsListChangedNotification(
     Notification[NotificationParams | None, Literal["notifications/workflows/list_changed"]]
 ):
@@ -632,6 +805,168 @@ class WorkflowsListChangedNotification(
 
     method: Literal["notifications/workflows/list_changed"] = "notifications/workflows/list_changed"
     params: NotificationParams | None = None
+
+
+class WorkflowSettingsReadResult(Result):
+    """Result for workflows/settings/read and workflows/settings/update."""
+
+    values: dict[str, Any] | None = None
+    overridden: bool | None = None
+    allowOverride: bool | None = None
+    locked: list[str] | None = None
+
+
+class WorkflowSettingsSchemaResult(Result):
+    """Result for workflows/settings/schema."""
+
+    schema: dict[str, Any] | None = None
+
+
+#
+# Provider Settings API (lowlevel-defined)
+#
+
+
+class ProviderSettingsReadRequestParams(RequestParams):
+    """Parameters for providers/settings/read."""
+
+    provider: str
+    model_config = ConfigDict(extra="allow")
+
+
+class ProviderSettingsReadRequest(
+    Request[ProviderSettingsReadRequestParams, Literal["providers/settings/read"]]
+):
+    """Read the effective (possibly persisted/overridden) settings for a provider."""
+
+    method: Literal["providers/settings/read"] = "providers/settings/read"
+    params: ProviderSettingsReadRequestParams
+
+
+class ProviderSettingsSchemaRequestParams(RequestParams):
+    """Parameters for providers/settings/schema."""
+
+    provider: str
+    model_config = ConfigDict(extra="allow")
+
+
+class ProviderSettingsSchemaRequest(
+    Request[ProviderSettingsSchemaRequestParams, Literal["providers/settings/schema"]]
+):
+    """Read the JSON schema for a provider's settings."""
+
+    method: Literal["providers/settings/schema"] = "providers/settings/schema"
+    params: ProviderSettingsSchemaRequestParams
+
+
+class ProviderSettingsUpdateRequestParams(RequestParams):
+    """Parameters for providers/settings/update (partial upsert)."""
+
+    provider: str
+    values: dict[str, Any] | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class ProviderSettingsUpdateRequest(
+    Request[ProviderSettingsUpdateRequestParams, Literal["providers/settings/update"]]
+):
+    """Update (merge) the provider's settings."""
+
+    method: Literal["providers/settings/update"] = "providers/settings/update"
+    params: ProviderSettingsUpdateRequestParams
+
+
+class ProviderSecretSummary(BaseModel):
+    """Metadata for a secret provider field (never exposes the raw secret)."""
+
+    hasValue: bool
+    model_config = ConfigDict(extra="allow")
+
+
+class ProviderSettingsReadResult(Result):
+    """Result for providers/settings/read and providers/settings/update."""
+
+    values: dict[str, Any] | None = None
+    overridden: bool | None = None
+    allowOverride: bool | None = None
+    locked: list[str] | None = None
+    secrets: dict[str, ProviderSecretSummary] | None = None
+
+
+class ProviderSettingsSchemaResult(Result):
+    """Result for providers/settings/schema."""
+
+    schema: dict[str, Any] | None = None
+
+
+#
+# Agent Settings API (lowlevel-defined)
+#
+
+
+class AgentSettingsReadRequestParams(RequestParams):
+    """Parameters for agents/settings/read."""
+
+    agent: str
+    model_config = ConfigDict(extra="allow")
+
+
+class AgentSettingsReadRequest(
+    Request[AgentSettingsReadRequestParams, Literal["agents/settings/read"]]
+):
+    """Read the effective (possibly persisted/overridden) settings for an agent."""
+
+    method: Literal["agents/settings/read"] = "agents/settings/read"
+    params: AgentSettingsReadRequestParams
+
+
+class AgentSettingsSchemaRequestParams(RequestParams):
+    """Parameters for agents/settings/schema."""
+
+    agent: str
+    model_config = ConfigDict(extra="allow")
+
+
+class AgentSettingsSchemaRequest(
+    Request[AgentSettingsSchemaRequestParams, Literal["agents/settings/schema"]]
+):
+    """Read the JSON schema for an agent's settings."""
+
+    method: Literal["agents/settings/schema"] = "agents/settings/schema"
+    params: AgentSettingsSchemaRequestParams
+
+
+class AgentSettingsUpdateRequestParams(RequestParams):
+    """Parameters for agents/settings/update (partial upsert)."""
+
+    agent: str
+    values: dict[str, Any] | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class AgentSettingsUpdateRequest(
+    Request[AgentSettingsUpdateRequestParams, Literal["agents/settings/update"]]
+):
+    """Update (merge) the agent's settings."""
+
+    method: Literal["agents/settings/update"] = "agents/settings/update"
+    params: AgentSettingsUpdateRequestParams
+
+
+class AgentSettingsReadResult(Result):
+    """Result for agents/settings/read and agents/settings/update."""
+
+    values: dict[str, Any] | None = None
+    overridden: bool | None = None
+    allowOverride: bool | None = None
+    locked: list[str] | None = None
+
+
+class AgentSettingsSchemaResult(Result):
+    """Result for agents/settings/schema."""
+
+    schema: dict[str, Any] | None = None
+
 
 LoggingLevel = Literal["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"]
 
@@ -796,6 +1131,258 @@ class ElicitResult(Result):
 
 
 # ------------------------------
+# System Events: topics, selectors, subscribe/unsubscribe, updates
+# ------------------------------
+
+Topic = Literal[
+    "runs/input",
+    "runs/output",
+    "telemetry/spans",
+    "telemetry/span",
+    "telemetry/payload",
+    "conversations/channels",
+    "conversations/channel",
+    "systemSessions/list",
+    "systemSessions/read",
+]
+
+
+class RunsScope(BaseModel):
+    system_session_id: str
+    run_id: str
+
+
+class SpanScope(RunsScope):
+    span_id: str
+
+
+class ChannelScope(RunsScope):
+    channel: str
+
+
+class SystemSessionScope(BaseModel):
+    system_session_id: str
+
+
+class SubscribeOptions(BaseModel):
+    deliverInitial: bool | None = None
+    coalesceMs: int | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class SystemEventsSubscribeParams(RequestParams):
+    topic: Topic
+    runs: RunsScope | None = None
+    span: SpanScope | None = None
+    channel: ChannelScope | None = None
+    session: SystemSessionScope | None = None
+    options: SubscribeOptions | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class SystemEventsSubscribeRequest(Request[SystemEventsSubscribeParams, Literal["systemEvents/subscribe"]]):
+    method: Literal["systemEvents/subscribe"] = "systemEvents/subscribe"
+    params: SystemEventsSubscribeParams
+
+
+class SystemEventsSubscribeResult(Result):
+    subscriptionId: str
+
+
+class SystemEventsUnsubscribeParams(RequestParams):
+    subscriptionId: str | None = None
+    topic: Topic | None = None
+    runs: RunsScope | None = None
+    span: SpanScope | None = None
+    channel: ChannelScope | None = None
+    session: SystemSessionScope | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class SystemEventsUnsubscribeRequest(Request[SystemEventsUnsubscribeParams, Literal["systemEvents/unsubscribe"]]):
+    method: Literal["systemEvents/unsubscribe"] = "systemEvents/unsubscribe"
+    params: SystemEventsUnsubscribeParams
+
+
+ChangeKind = Literal["created", "updated", "deleted", "refetch"]
+
+
+class SystemEventsUpdatedParams(NotificationParams):
+    topic: Topic
+    sequence: int
+    change: ChangeKind | None = None
+    runs: RunsScope | None = None
+    span: SpanScope | None = None
+    channel: ChannelScope | None = None
+    session: SystemSessionScope | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class SystemEventsUpdatedNotification(
+    Notification[SystemEventsUpdatedParams, Literal["notifications/systemEvents/updated"]]
+):
+    method: Literal["notifications/systemEvents/updated"] = "notifications/systemEvents/updated"
+    params: SystemEventsUpdatedParams
+
+
+# ------------------------------
+# System handlers: list/read requests & results
+# ------------------------------
+
+
+class RunsIOReadRequestParams(RequestParams):
+    runs: RunsScope
+    model_config = ConfigDict(extra="allow")
+
+
+class RunsInputReadRequest(Request[RunsIOReadRequestParams, Literal["runs/input/read"]]):
+    method: Literal["runs/input/read"] = "runs/input/read"
+    params: RunsIOReadRequestParams
+
+
+class RunsOutputReadRequest(Request[RunsIOReadRequestParams, Literal["runs/output/read"]]):
+    method: Literal["runs/output/read"] = "runs/output/read"
+    params: RunsIOReadRequestParams
+
+
+class RunsIOReadResult(Result):
+    data: Any | None = None
+    workflow: str | None = None
+    schema: dict[str, Any] | None = None
+    system_session_id: str | None = None
+    run_id: str | None = None
+
+
+class RunsListRequestParams(RequestParams):
+    system_session: SystemSessionScope
+    workflow: str | None = None
+    thread_id: str | None = None
+    state: RunState | None = None
+    outcome: RunOutcome | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+class RunsListRequest(Request[RunsListRequestParams, Literal["runs/list"]]):
+    method: Literal["runs/list"] = "runs/list"
+    params: RunsListRequestParams
+
+
+class RunsListResult(Result):
+    runs: list[RunMeta]
+
+
+class RunsReadRequestParams(RequestParams):
+    runs: RunsScope
+    model_config = ConfigDict(extra="allow")
+
+
+class RunsReadRequest(Request[RunsReadRequestParams, Literal["runs/read"]]):
+    method: Literal["runs/read"] = "runs/read"
+    params: RunsReadRequestParams
+
+
+class RunsReadResult(Result):
+    run: RunMeta | None = None
+
+
+class TelemetrySpansListRequestParams(RequestParams):
+    runs: RunsScope
+    model_config = ConfigDict(extra="allow")
+
+
+class TelemetrySpansListRequest(Request[TelemetrySpansListRequestParams, Literal["telemetry/spans/list"]]):
+    method: Literal["telemetry/spans/list"] = "telemetry/spans/list"
+    params: TelemetrySpansListRequestParams
+
+
+class TelemetrySpansListResult(Result):
+    spans: list[TelemetrySpanView]
+
+
+class TelemetrySpanReadRequestParams(RequestParams):
+    span: SpanScope
+    model_config = ConfigDict(extra="allow")
+
+
+class TelemetrySpanReadRequest(Request[TelemetrySpanReadRequestParams, Literal["telemetry/span/read"]]):
+    method: Literal["telemetry/span/read"] = "telemetry/span/read"
+    params: TelemetrySpanReadRequestParams
+
+
+class TelemetrySpanReadResult(Result):
+    span: TelemetrySpanView | None = None
+
+
+class TelemetryPayloadReadRequestParams(RequestParams):
+    span: SpanScope
+    model_config = ConfigDict(extra="allow")
+
+
+class TelemetryPayloadReadRequest(Request[TelemetryPayloadReadRequestParams, Literal["telemetry/payload/read"]]):
+    method: Literal["telemetry/payload/read"] = "telemetry/payload/read"
+    params: TelemetryPayloadReadRequestParams
+
+
+class TelemetryPayloadReadResult(Result):
+    payload: SpanPayloadEnvelope | None = None
+
+
+class ChannelsListRequestParams(RequestParams):
+    runs: RunsScope
+    model_config = ConfigDict(extra="allow")
+
+
+class ChannelsListRequest(
+    Request[ChannelsListRequestParams, Literal["conversations/channels/list"]]
+):
+    method: Literal["conversations/channels/list"] = "conversations/channels/list"
+    params: ChannelsListRequestParams
+
+
+class ChannelsListResult(Result):
+    channels: list[ChannelMeta]
+
+
+class ChannelReadRequestParams(RequestParams):
+    channel: ChannelScope
+    model_config = ConfigDict(extra="allow")
+
+
+class ChannelReadRequest(
+    Request[ChannelReadRequestParams, Literal["conversations/channel/read"]]
+):
+    method: Literal["conversations/channel/read"] = "conversations/channel/read"
+    params: ChannelReadRequestParams
+
+
+class ChannelReadResult(Result):
+    channel: ChannelView
+
+
+class SystemSessionsListRequest(Request[RequestParams | None, Literal["systemSessions/list"]]):
+    method: Literal["systemSessions/list"] = "systemSessions/list"
+    params: RequestParams | None = None
+
+
+class SystemSessionsListResult(Result):
+    sessions: list[SystemSession]
+
+
+class SystemSessionReadRequestParams(RequestParams):
+    session: SystemSessionScope
+    model_config = ConfigDict(extra="allow")
+
+
+class SystemSessionReadRequest(Request[SystemSessionReadRequestParams, Literal["systemSessions/read"]]):
+    method: Literal["systemSessions/read"] = "systemSessions/read"
+    params: SystemSessionReadRequestParams
+
+
+class SystemSessionReadResult(Result):
+    session: SystemSession | None = None
+
+
+# ------------------------------
 # Client/Server Message Unions
 # ------------------------------
 
@@ -812,6 +1399,28 @@ class ClientRequest(
         | UnsubscribeRequest
         | ListWorkflowsRequest
         | RunWorkflowRequest
+        | WorkflowSettingsReadRequest
+        | WorkflowSettingsSchemaRequest
+        | WorkflowSettingsUpdateRequest
+        | ProviderSettingsReadRequest
+        | ProviderSettingsSchemaRequest
+        | ProviderSettingsUpdateRequest
+        | AgentSettingsReadRequest
+        | AgentSettingsSchemaRequest
+        | AgentSettingsUpdateRequest
+        | SystemEventsSubscribeRequest
+        | SystemEventsUnsubscribeRequest
+        | RunsListRequest
+        | RunsReadRequest
+        | RunsInputReadRequest
+        | RunsOutputReadRequest
+        | TelemetrySpansListRequest
+        | TelemetrySpanReadRequest
+        | TelemetryPayloadReadRequest
+        | ChannelsListRequest
+        | ChannelReadRequest
+        | SystemSessionsListRequest
+        | SystemSessionReadRequest
     ]
 ):
     pass
@@ -828,21 +1437,11 @@ class ClientNotification(
     pass
 
 
-class ClientResult(
-    RootModel[
-        EmptyResult
-        | ListRootsResult
-        | ElicitResult
-    ]):
+class ClientResult(RootModel[EmptyResult | ListRootsResult | ElicitResult]):
     pass
 
 
-class ServerRequest(
-    RootModel[
-        PingRequest
-        | ListRootsRequest
-        | ElicitRequest
-    ]):
+class ServerRequest(RootModel[PingRequest | ListRootsRequest | ElicitRequest]):
     pass
 
 
@@ -854,6 +1453,7 @@ class ServerNotification(
         | ResourceUpdatedNotification
         | ResourceListChangedNotification
         | WorkflowsListChangedNotification
+        | SystemEventsUpdatedNotification
     ]
 ):
     pass
@@ -868,6 +1468,23 @@ class ServerResult(
         | ReadResourceResult
         | ListWorkflowsResult
         | RunWorkflowResult
+        | WorkflowSettingsReadResult
+        | WorkflowSettingsSchemaResult
+        | ProviderSettingsReadResult
+        | ProviderSettingsSchemaResult
+        | AgentSettingsReadResult
+        | AgentSettingsSchemaResult
+        | SystemEventsSubscribeResult
+        | RunsListResult
+        | RunsReadResult
+        | RunsIOReadResult
+        | TelemetrySpansListResult
+        | TelemetrySpanReadResult
+        | TelemetryPayloadReadResult
+        | ChannelsListResult
+        | ChannelReadResult
+        | SystemSessionsListResult
+        | SystemSessionReadResult
     ]
 ):
     pass

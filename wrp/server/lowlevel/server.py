@@ -76,8 +76,8 @@ from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.shared.message import ServerMessageMetadata, SessionMessage
 
 import wrp.types as types
-from wrp.shared.exceptions import WrpError
 from wrp.shared.context import RequestContext
+from wrp.shared.exceptions import WrpError
 from wrp.shared.session import RequestResponder
 from wrp.server.models import InitializationOptions
 from wrp.server.session import ServerSession
@@ -187,17 +187,127 @@ class Server(Generic[LifespanResultT, RequestT]):
 
         # Set workflow capabilities if handler exists
         if types.ListWorkflowsRequest in self.request_handlers:
-            workflows_capability = types.WorkflowsCapability(listChanged=notification_options.workflows_changed)
+            # settings sub-capability toggled by presence of specific handlers
+            wf_settings = None
+            has_read = types.WorkflowSettingsReadRequest in self.request_handlers
+            has_schema = types.WorkflowSettingsSchemaRequest in self.request_handlers
+            has_update = types.WorkflowSettingsUpdateRequest in self.request_handlers
+            if has_read or has_schema or has_update:
+                wf_settings = types.WorkflowSettingsCapability(
+                    read=True if has_read else None,
+                    update=True if has_update else None,
+                    schema=True if has_schema else None,
+                )
+            workflows_capability = types.WorkflowsCapability(
+                listChanged=notification_options.workflows_changed,
+                settings=wf_settings,
+            )
+
+        # Provider settings capabilities
+        providers_capability = None
+        if (
+            types.ProviderSettingsReadRequest in self.request_handlers
+            or types.ProviderSettingsSchemaRequest in self.request_handlers
+            or types.ProviderSettingsUpdateRequest in self.request_handlers
+        ):
+            providers_capability = types.ProvidersCapability(
+                settings=types.ProviderSettingsCapability(
+                    read=True if types.ProviderSettingsReadRequest in self.request_handlers else None,
+                    update=True if types.ProviderSettingsUpdateRequest in self.request_handlers else None,
+                    schema=True if types.ProviderSettingsSchemaRequest in self.request_handlers else None,
+                )
+            )
+
+        # Agent settings capabilities
+        agents_capability = None
+        if (
+            types.AgentSettingsReadRequest in self.request_handlers
+            or types.AgentSettingsSchemaRequest in self.request_handlers
+            or types.AgentSettingsUpdateRequest in self.request_handlers
+        ):
+            agents_capability = types.AgentsCapability(
+                settings=types.AgentSettingsCapability(
+                    read=True if types.AgentSettingsReadRequest in self.request_handlers else None,
+                    update=True if types.AgentSettingsUpdateRequest in self.request_handlers else None,
+                    schema=True if types.AgentSettingsSchemaRequest in self.request_handlers else None,
+                )
+            )
 
         # Set logging capabilities if handler exists
         if types.SetLevelRequest in self.request_handlers:
             logging_capability = types.LoggingCapability()
 
+        # System handlers (+ subscribe flag inferred from events/subscribe presence)
+        subscribe_supported = types.SystemEventsSubscribeRequest in self.request_handlers
+        runs_cap = None
+        run_requests = (
+            types.RunsListRequest,
+            types.RunsReadRequest,
+            types.RunsInputReadRequest,
+            types.RunsOutputReadRequest,
+        )
+        if any(req in self.request_handlers for req in run_requests):
+            runs_cap = types.RunsCapability(
+                list=True if types.RunsListRequest in self.request_handlers else None,
+                read=True if types.RunsReadRequest in self.request_handlers else None,
+                input=types.RunsIOCapability(read=True)
+                if types.RunsInputReadRequest in self.request_handlers
+                else None,
+                output=types.RunsIOCapability(read=True)
+                if types.RunsOutputReadRequest in self.request_handlers
+                else None,
+                subscribe=True if subscribe_supported else None,
+            )
+        tel_cap = None
+        if (
+            types.TelemetrySpansListRequest in self.request_handlers
+            or types.TelemetrySpanReadRequest in self.request_handlers
+            or types.TelemetryPayloadReadRequest in self.request_handlers
+        ):
+            tel_cap = types.TelemetryCapability(
+                spans=types.TelemetrySpansCapability(
+                    list=True if types.TelemetrySpansListRequest in self.request_handlers else None,
+                    read=True if types.TelemetrySpanReadRequest in self.request_handlers else None,
+                ),
+                payloads=types.TelemetryPayloadsCapability(
+                    read=True if types.TelemetryPayloadReadRequest in self.request_handlers else None
+                ),
+                subscribe=True if subscribe_supported else None,
+            )
+        conv_cap = None
+        if (
+            types.ChannelsListRequest in self.request_handlers
+            or types.ChannelReadRequest in self.request_handlers
+        ):
+            conv_cap = types.ConversationsCapability(
+                channels=types.ChannelsCapability(
+                    list=True if types.ChannelsListRequest in self.request_handlers else None,
+                    read=True if types.ChannelReadRequest in self.request_handlers else None,
+                ),
+                subscribe=True if subscribe_supported else None,
+            )
+        sess_cap = None
+        if (
+            types.SystemSessionsListRequest in self.request_handlers
+            or types.SystemSessionReadRequest in self.request_handlers
+        ):
+            sess_cap = types.SystemSessionsCapability(
+                list=True if types.SystemSessionsListRequest in self.request_handlers else None,
+                read=True if types.SystemSessionReadRequest in self.request_handlers else None,
+                subscribe=True if subscribe_supported else None,
+            )
+
         return types.ServerCapabilities(
             resources=resources_capability,
             workflows=workflows_capability,
             logging=logging_capability,
+            systemSessions=sess_cap,
+            runs=runs_cap,
+            telemetry=tel_cap,
+            conversations=conv_cap,
             experimental=experimental_capabilities,
+            providers=providers_capability,
+            agents=agents_capability,
         )
 
     @property
@@ -453,6 +563,135 @@ class Server(Generic[LifespanResultT, RequestT]):
 
         return decorator
 
+    def workflow_settings_read(self):
+        def decorator(func: Callable[[str], Awaitable[types.WorkflowSettingsReadResult]]):
+            logger.debug("Registering handler for WorkflowSettingsReadRequest")
+
+            async def handler(req: types.WorkflowSettingsReadRequest):
+                result = await func(req.params.workflow)
+                return types.ServerResult(result)
+
+            self.request_handlers[types.WorkflowSettingsReadRequest] = handler
+            return func
+
+        return decorator
+
+    def workflow_settings_schema(self):
+        def decorator(func: Callable[[str], Awaitable[types.WorkflowSettingsSchemaResult]]):
+            logger.debug("Registering handler for WorkflowSettingsSchemaRequest")
+
+            async def handler(req: types.WorkflowSettingsSchemaRequest):
+                result = await func(req.params.workflow)
+                return types.ServerResult(result)
+
+            self.request_handlers[types.WorkflowSettingsSchemaRequest] = handler
+            return func
+
+        return decorator
+
+    def workflow_settings_update(self):
+        def decorator(
+            func: Callable[[str, dict[str, Any]], Awaitable[types.WorkflowSettingsReadResult]],
+        ):
+            logger.debug("Registering handler for WorkflowSettingsUpdateRequest")
+
+            async def handler(req: types.WorkflowSettingsUpdateRequest):
+                wf = req.params.workflow
+                values = req.params.values or {}
+                result = await func(wf, values)
+                return types.ServerResult(result)
+
+            self.request_handlers[types.WorkflowSettingsUpdateRequest] = handler
+            return func
+
+        return decorator
+
+    def provider_settings_read(self):
+        def decorator(func: Callable[[str], Awaitable[types.ProviderSettingsReadResult]]):
+            logger.debug("Registering handler for ProviderSettingsReadRequest")
+
+            async def handler(req: types.ProviderSettingsReadRequest):
+                result = await func(req.params.provider)
+                return types.ServerResult(result)
+
+            self.request_handlers[types.ProviderSettingsReadRequest] = handler
+            return func
+
+        return decorator
+
+    def provider_settings_schema(self):
+        def decorator(func: Callable[[str], Awaitable[types.ProviderSettingsSchemaResult]]):
+            logger.debug("Registering handler for ProviderSettingsSchemaRequest")
+
+            async def handler(req: types.ProviderSettingsSchemaRequest):
+                result = await func(req.params.provider)
+                return types.ServerResult(result)
+
+            self.request_handlers[types.ProviderSettingsSchemaRequest] = handler
+            return func
+
+        return decorator
+
+    def provider_settings_update(self):
+        def decorator(
+            func: Callable[[str, dict[str, Any]], Awaitable[types.ProviderSettingsReadResult]],
+        ):
+            logger.debug("Registering handler for ProviderSettingsUpdateRequest")
+
+            async def handler(req: types.ProviderSettingsUpdateRequest):
+                name = req.params.provider
+                values = req.params.values or {}
+                result = await func(name, values)
+                return types.ServerResult(result)
+
+            self.request_handlers[types.ProviderSettingsUpdateRequest] = handler
+            return func
+
+        return decorator
+
+    def agent_settings_read(self):
+        def decorator(func: Callable[[str], Awaitable[types.AgentSettingsReadResult]]):
+            logger.debug("Registering handler for AgentSettingsReadRequest")
+
+            async def handler(req: types.AgentSettingsReadRequest):
+                result = await func(req.params.agent)
+                return types.ServerResult(result)
+
+            self.request_handlers[types.AgentSettingsReadRequest] = handler
+            return func
+
+        return decorator
+
+    def agent_settings_schema(self):
+        def decorator(func: Callable[[str], Awaitable[types.AgentSettingsSchemaResult]]):
+            logger.debug("Registering handler for AgentSettingsSchemaRequest")
+
+            async def handler(req: types.AgentSettingsSchemaRequest):
+                result = await func(req.params.agent)
+                return types.ServerResult(result)
+
+            self.request_handlers[types.AgentSettingsSchemaRequest] = handler
+            return func
+
+        return decorator
+
+    def agent_settings_update(self):
+        def decorator(
+            func: Callable[[str, dict[str, Any]], Awaitable[types.AgentSettingsReadResult]],
+        ):
+            logger.debug("Registering handler for AgentSettingsUpdateRequest")
+
+            async def handler(req: types.AgentSettingsUpdateRequest):
+                name = req.params.agent
+                values = req.params.values or {}
+                result = await func(name, values)
+                return types.ServerResult(result)
+
+            self.request_handlers[types.AgentSettingsUpdateRequest] = handler
+            return func
+
+        return decorator
+
     def progress_notification(self):
         def decorator(
             func: Callable[[str | int, float, float | None, str | None], Awaitable[None]],
@@ -470,6 +709,116 @@ class Server(Generic[LifespanResultT, RequestT]):
             self.notification_handlers[types.ProgressNotification] = handler
             return func
 
+        return decorator
+
+    # ---- System Events (lowlevel routing only) -----------------------------
+    def system_events_subscribe(self):
+        def decorator(fn: Callable[[types.EventsSubscribeParams], Awaitable[types.EventsSubscribeResult]]):
+            logger.debug("Registering handler for SystemEventsSubscribeRequest")
+            async def handler(req: types.SystemEventsSubscribeRequest):
+                result = await fn(req.params)
+                return types.ServerResult(result)
+            self.request_handlers[types.SystemEventsSubscribeRequest] = handler
+            return fn
+        return decorator
+
+    def system_events_unsubscribe(self):
+        def decorator(fn: Callable[[types.EventsUnsubscribeParams], Awaitable[None]]):
+            logger.debug("Registering handler for SystemEventsUnsubscribeRequest")
+            async def handler(req: types.SystemEventsUnsubscribeRequest):
+                await fn(req.params)
+                return types.ServerResult(types.EmptyResult())
+            self.request_handlers[types.SystemEventsUnsubscribeRequest] = handler
+            return fn
+        return decorator
+
+    # ---- System handlers (routing only; implementations live in runtime) ---
+    def runs_list(self):
+        def decorator(fn: Callable[[types.RunsListRequestParams], Awaitable[types.RunsListResult]]):
+            async def handler(req: types.RunsListRequest):
+                return types.ServerResult(await fn(req.params))
+            self.request_handlers[types.RunsListRequest] = handler
+            return fn
+        return decorator
+
+    def runs_read(self):
+        def decorator(fn: Callable[[types.RunsScope], Awaitable[types.RunsReadResult]]):
+            async def handler(req: types.RunsReadRequest):
+                return types.ServerResult(await fn(req.params.runs))
+            self.request_handlers[types.RunsReadRequest] = handler
+            return fn
+        return decorator
+
+    def runs_input_read(self):
+        def decorator(fn: Callable[[types.RunsScope], Awaitable[types.RunsIOReadResult]]):
+            async def handler(req: types.RunsInputReadRequest):
+                return types.ServerResult(await fn(req.params.runs))
+            self.request_handlers[types.RunsInputReadRequest] = handler
+            return fn
+        return decorator
+
+    def runs_output_read(self):
+        def decorator(fn: Callable[[types.RunsScope], Awaitable[types.RunsIOReadResult]]):
+            async def handler(req: types.RunsOutputReadRequest):
+                return types.ServerResult(await fn(req.params.runs))
+            self.request_handlers[types.RunsOutputReadRequest] = handler
+            return fn
+        return decorator
+
+    def telemetry_spans_list(self):
+        def decorator(fn: Callable[[types.RunsScope], Awaitable[types.TelemetrySpansListResult]]):
+            async def handler(req: types.TelemetrySpansListRequest):
+                return types.ServerResult(await fn(req.params.runs))
+            self.request_handlers[types.TelemetrySpansListRequest] = handler
+            return fn
+        return decorator
+
+    def telemetry_span_read(self):
+        def decorator(fn: Callable[[types.SpanScope], Awaitable[types.TelemetrySpanReadResult]]):
+            async def handler(req: types.TelemetrySpanReadRequest):
+                return types.ServerResult(await fn(req.params.span))
+            self.request_handlers[types.TelemetrySpanReadRequest] = handler
+            return fn
+        return decorator
+
+    def telemetry_payload_read(self):
+        def decorator(fn: Callable[[types.SpanScope], Awaitable[types.TelemetryPayloadReadResult]]):
+            async def handler(req: types.TelemetryPayloadReadRequest):
+                return types.ServerResult(await fn(req.params.span))
+            self.request_handlers[types.TelemetryPayloadReadRequest] = handler
+            return fn
+        return decorator
+
+    def conversations_channels_list(self):
+        def decorator(fn: Callable[[types.RunsScope], Awaitable[types.ChannelsIndexResult]]):
+            async def handler(req: types.ChannelsListRequest):
+                return types.ServerResult(await fn(req.params.runs))
+            self.request_handlers[types.ChannelsListRequest] = handler
+            return fn
+        return decorator
+
+    def conversations_channel_read(self):
+        def decorator(fn: Callable[[types.ChannelScope], Awaitable[types.ChannelReadResult]]):
+            async def handler(req: types.ChannelReadRequest):
+                return types.ServerResult(await fn(req.params.channel))
+            self.request_handlers[types.ChannelReadRequest] = handler
+            return fn
+        return decorator
+
+    def system_sessions_list(self):
+        def decorator(fn: Callable[[], Awaitable[types.SystemSessionsListResult]]):
+            async def handler(_: types.SystemSessionsListRequest):
+                return types.ServerResult(await fn())
+            self.request_handlers[types.SystemSessionsListRequest] = handler
+            return fn
+        return decorator
+
+    def system_session_read(self):
+        def decorator(fn: Callable[[types.SystemSessionScope], Awaitable[types.SystemSessionReadResult]]):
+            async def handler(req: types.SystemSessionReadRequest):
+                return types.ServerResult(await fn(req.params.session))
+            self.request_handlers[types.SystemSessionReadRequest] = handler
+            return fn
         return decorator
 
     async def run(

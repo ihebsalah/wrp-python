@@ -4,7 +4,7 @@ from __future__ import annotations as _annotations
 import inspect
 import re
 import weakref
-from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Iterable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Iterable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import TYPE_CHECKING, Any, Generic, Literal, cast
 
@@ -16,7 +16,7 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.authentication import AuthenticationMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import Response
 from starlette.routing import Mount, Route
 from starlette.types import Receive, Scope, Send
 
@@ -44,31 +44,34 @@ from wrp.server.lowlevel.server import LifespanResultT
 from wrp.server.lowlevel.server import Server as WRPServer
 from wrp.server.lowlevel.server import lifespan as default_lifespan
 from wrp.server.middleware.header_compat import HeaderCompatMiddleware
-from wrp.server.session import ServerSession, ServerSessionT
+from wrp.server.runtime.settings.agents import AgentSettingsRegistry
+from wrp.server.runtime.settings.agents import AgentSettings
+from wrp.server.runtime.conversations.privacy.guards import (
+    is_private_only_conversations_selector,
+)
+from wrp.server.runtime.conversations.privacy.policy import ConversationResourcePolicy
+from wrp.server.runtime.conversations.privacy.redaction import sanitize_conversation_items
+from wrp.server.runtime.conversations.seeding import WorkflowConversationSeeding
+from wrp.server.runtime.conversations.types import ChannelMeta, ChannelView
 from wrp.server.runtime.limits import DEFAULT_GLOBAL_INPUT_LIMIT_BYTES
+from wrp.server.runtime.settings.providers import ProviderSettingsRegistry
+from wrp.server.runtime.settings.providers import ProviderSettings
+from wrp.server.runtime.settings.bootstrap import hydrate_provider_and_agent_settings
 from wrp.server.runtime.runs.bindings import RunBindings
 from wrp.server.runtime.store.base import Store
 from wrp.server.runtime.store.stores.memory_store import InMemoryStore
+from wrp.server.runtime.telemetry.payloads.types import SpanPayloadEnvelope
 from wrp.server.runtime.telemetry.privacy.guards import is_private_only_span_payload_uri
-from wrp.server.runtime.conversations.privacy.guards import (
-    is_private_only_conversations_uri,
-)
 from wrp.server.runtime.telemetry.privacy.policy import TelemetryResourcePolicy
 from wrp.server.runtime.telemetry.privacy.redaction import sanitize_envelope_dict
-from wrp.server.runtime.conversations.privacy.policy import ConversationResourcePolicy
-from wrp.server.runtime.conversations.privacy.redaction import sanitize_conversation_items
-from wrp.server.runtime.telemetry.views import (
-    build_span_index,
-    serialize_span_detail,
-    serialize_span_list,
-)
+from wrp.server.runtime.telemetry.views import build_span_index, get_span_view, list_span_views
 from wrp.server.runtime.workflows import WorkflowManager
-from wrp.server.runtime.conversations.seeding import WorkflowConversationSeeding
+from wrp.server.runtime.settings.workflows import WorkflowSettings
 from wrp.server.runtime.workflows.types import RunWorkflowResult, WorkflowInput, WorkflowOutput
-from wrp.server.runtime.workflows.settings import WorkflowSettings
+from wrp.server.session import ServerSession, ServerSessionT
 from wrp.shared.context import LifespanContextT, RequestContext, RequestT
 from wrp.shared.version import SUPPORTED_PROTOCOL_VERSIONS as WRP_SUPPORTED_VERSIONS
-from wrp.types import ListWorkflowsResult
+import wrp.types as types
 
 if TYPE_CHECKING:
     from mcp.server.lowlevel.server import Server as MCPServer
@@ -217,6 +220,9 @@ class WRP(Generic[LifespanResultT]):
             warn_on_duplicate_workflows=self.settings.warn_on_duplicate_workflows,
             store=self._store,
         )
+        # provider/agent settings registries (global, non-run)
+        self._provider_settings_registry = ProviderSettingsRegistry(store=self._store)
+        self._agent_settings_registry = AgentSettingsRegistry(store=self._store)
         # Validate auth configuration
         if self.settings.auth is not None:
             if auth_server_provider and token_verifier:
@@ -243,13 +249,15 @@ class WRP(Generic[LifespanResultT]):
         )
         # Global seeding fallback for all workflows (can be overridden per workflow)
         self._default_seeding: WorkflowConversationSeeding | None = default_seeding
-        # uri -> WeakSet[ServerSession]
+        # Resource subscriptions (authors' resources only)
         self._resource_subscriptions: dict[str, "weakref.WeakSet[ServerSession]"] = {}
+        # System events subscriptions: key -> {seq:int, subs:WeakSet}
+        self._event_subscriptions: dict[str, dict[str, Any]] = {}
+        # subscriptionId -> key
+        self._event_subscription_index: dict[str, str] = {}
 
         # Set up WRP protocol handlers
         self._setup_handlers()
-        self._register_builtin_run_resources()
-        self._register_builtin_workflow_settings_endpoints()
 
         # Configure logging
         configure_logging(self.settings.log_level)
@@ -314,28 +322,47 @@ class WRP(Generic[LifespanResultT]):
 
     def _setup_handlers(self) -> None:
         """Set up core WRP protocol handlers."""
-        self._wrp_server.list_resources()(self.list_resources)
-        self._wrp_server.read_resource()(self.read_resource)
-        self._wrp_server.list_resource_templates()(self.list_resource_templates)
+        self._wrp_server.list_resources()(self._list_resources)
+        self._wrp_server.read_resource()(self._read_resource)
+        self._wrp_server.list_resource_templates()(self._list_resource_templates)
         # subscriptions
         self._wrp_server.subscribe_resource()(self._subscribe_resource)
         self._wrp_server.unsubscribe_resource()(self._unsubscribe_resource)
 
-        self._wrp_server.list_workflows()(self.list_workflows)
-        self._wrp_server.run_workflow(validate_input=True)(self.run_workflow)
+        self._wrp_server.list_workflows()(self._list_workflows)
+        self._wrp_server.run_workflow(validate_input=True)(self._run_workflow)
+        # workflow settings (lowlevel protocol handlers)
+        self._wrp_server.workflow_settings_read()(self._wf_settings_read)
+        self._wrp_server.workflow_settings_schema()(self._wf_settings_schema)
+        self._wrp_server.workflow_settings_update()(self._wf_settings_update)
+        # provider settings (lowlevel protocol handlers)
+        self._wrp_server.provider_settings_read()(self._provider_settings_read)
+        self._wrp_server.provider_settings_schema()(self._provider_settings_schema)
+        self._wrp_server.provider_settings_update()(self._provider_settings_update)
+        # agent settings (lowlevel protocol handlers)
+        self._wrp_server.agent_settings_read()(self._agent_settings_read)
+        self._wrp_server.agent_settings_schema()(self._agent_settings_schema)
+        self._wrp_server.agent_settings_update()(self._agent_settings_update)
+        # system events + handlers
+        self._wrp_server.system_events_subscribe()(self._system_events_subscribe)
+        self._wrp_server.system_events_unsubscribe()(self._system_events_unsubscribe)
+        self._wrp_server.runs_list()(self._runs_list)
+        self._wrp_server.runs_read()(self._runs_read)
+        self._wrp_server.runs_input_read()(self._runs_input_read)
+        self._wrp_server.runs_output_read()(self._runs_output_read)
+        self._wrp_server.telemetry_spans_list()(self._telemetry_spans_list)
+        self._wrp_server.telemetry_span_read()(self._telemetry_span_read)
+        self._wrp_server.telemetry_payload_read()(self._telemetry_payload_read)
+        self._wrp_server.conversations_channels_list()(self._conversations_channels_list)
+        self._wrp_server.conversations_channel_read()(self._conversations_channel_read)
+        self._wrp_server.system_sessions_list()(self._system_sessions_list)
+        self._wrp_server.system_session_read()(self._system_session_read)
 
     async def _subscribe_resource(self, uri: AnyUrl) -> None:
-        """Remember that the *current* session wants updates for this uri."""
+        """Remember that the *current* session wants updates for this author-provided resource."""
         ctx = self.get_context()
-        # Block subscriptions to payload resources that are private-only per policy
-        if await is_private_only_span_payload_uri(str(uri), self._telemetry_policy, self._store):
-            raise ResourceError("Resource is private-only by policy; subscriptions are not allowed")
-        # Block subscriptions to conversations resources that are private-only per policy
-        if await is_private_only_conversations_uri(str(uri), self._conversation_policy, self._store):
-            raise ResourceError("Resource is private-only by policy; subscriptions are not allowed")
         sess = ctx.request_context.session
-        bucket = self._resource_subscriptions.setdefault(str(uri), weakref.WeakSet())
-        bucket.add(sess)
+        self._resource_subscriptions.setdefault(str(uri), weakref.WeakSet()).add(sess)
 
     async def _unsubscribe_resource(self, uri: AnyUrl) -> None:
         """Remove the *current* session from the uri's subscription set."""
@@ -362,165 +389,279 @@ class WRP(Generic[LifespanResultT]):
                 except Exception:
                     pass
 
-    def _register_builtin_run_resources(self) -> None:
-        """Register built-in resources for run inputs/outputs/conversation & span payloads."""
+    # -------------------------
+    # System Events: runtime impl
+    # -------------------------
+    def _system_event_key(
+        self,
+        topic: types.Topic,
+        *,
+        runs: types.RunsScope | None = None,
+        span: types.SpanScope | None = None,
+        channel: types.ChannelScope | None = None,
+        session_sel: types.SystemSessionScope | None = None,
+    ) -> str:
+        if span:  # most specific
+            return f"{topic}|ss:{span.system_session_id}|run:{span.run_id}|span:{span.span_id}"
+        if channel:
+            return f"{topic}|ss:{channel.system_session_id}|run:{channel.run_id}|ch:{channel.channel}"
+        if runs:
+            return f"{topic}|ss:{runs.system_session_id}|run:{runs.run_id}"
+        if session_sel:
+            return f"{topic}|ss:{session_sel.system_session_id}"
+        return f"{topic}|global"
 
-        async def _find_run_span_id(ctx: "Context", run_id: str) -> str | None:  # type: ignore[name-defined]
-            events = await ctx.wrp.store.load_telemetry(run_id)
-            for ev in events:
-                # look for the single run-start span
-                if (
-                    getattr(ev, "kind", None) == "span"
-                    and getattr(ev, "span_kind", None) == "run"
-                    and getattr(ev, "phase", None) == "start"
-                ):
-                    return getattr(ev, "span_id", None)
-            return None
+    async def _system_events_subscribe(self, params: types.SystemEventsSubscribeParams) -> types.SystemEventsSubscribeResult:
+        # Enforce policy for conversations subscriptions
+        if params.topic == "conversations/channel":
+            ch_id = params.channel.channel if params.channel else None
+            if is_private_only_conversations_selector(self._conversation_policy, channel=ch_id):
+                raise PermissionError("Subscription denied: channel is private under current conversation policy.")
+        elif params.topic == "conversations/channels":
+            # Aggregate guard: if the entire channels index would be private-only, deny
+            if is_private_only_conversations_selector(self._conversation_policy, channel=None):
+                raise PermissionError(
+                    "Subscription denied: channels index is private under current conversation policy."
+                )
 
-        @self.resource("resource://runs/{run_id}/input", mime_type="application/json", title="Run Input")
-        async def _run_input(run_id: str, ctx: "Context") -> Any:  # type: ignore[name-defined]
-            span_id = await _find_run_span_id(ctx, run_id)
-            if not span_id:
-                return None
-            env = await ctx.wrp.store.get_span_payload(run_id, span_id)
-            if not env:
-                return None
-            env_dict = env.model_dump()
-            sanitized = sanitize_envelope_dict(env_dict, ctx.wrp.telemetry_policy)
-            part = sanitized.get("capture", {}).get("start")
-            return part.get("data") if part else None
-
-        @self.resource("resource://runs/{run_id}/output", mime_type="application/json", title="Run Output")
-        async def _run_output(run_id: str, ctx: "Context") -> Any:  # type: ignore[name-defined]
-            span_id = await _find_run_span_id(ctx, run_id)
-            if not span_id:
-                return None
-            env = await ctx.wrp.store.get_span_payload(run_id, span_id)
-            if not env:
-                return None
-            env_dict = env.model_dump()
-            sanitized = sanitize_envelope_dict(env_dict, ctx.wrp.telemetry_policy)
-            part = sanitized.get("capture", {}).get("end")
-            return part.get("data") if part else None
-
-        @self.resource("resource://runs/{run_id}/conversations", mime_type="application/json", title="Run Conversations (Index)")
-        async def _run_conversations_index(run_id: str, ctx: "Context") -> Any:  # type: ignore[name-defined]
-            items = await ctx.wrp.store.load_conversation(run_id)
-            channels = sorted({getattr(it, "channel", "default") for it in items})
-            return {"channels": channels}
-
-        @self.resource(
-            "resource://runs/{run_id}/conversations/{channel}",
-            mime_type="application/json",
-            title="Run Conversations (Channel)",
+        ctx = self.get_context()
+        sess = ctx.request_context.session
+        key = self._system_event_key(
+            params.topic, runs=params.runs, span=params.span, channel=params.channel, session_sel=params.session
         )
-        async def _run_conversation_channel(run_id: str, channel: str, ctx: "Context") -> Any:  # type: ignore[name-defined]
-            all_items = await ctx.wrp.store.load_conversation(run_id)
-            filtered = [it for it in all_items if it.channel == channel]
-            sanitized = sanitize_conversation_items(filtered, ctx.wrp.conversation_policy)
-            return sanitized
+        bucket = self._event_subscriptions.setdefault(key, {"seq": 0, "subs": weakref.WeakSet()})
+        bucket["subs"].add(sess)
+        # assign an id and index it
+        sub_id = f"sub_{id(sess)}_{len(self._event_subscription_index)+1}"
+        self._event_subscription_index[sub_id] = key
+        # initial seed
+        if params.options and params.options.deliverInitial:
+            bucket["seq"] += 1
+            await sess.send_system_events_updated(
+                topic=params.topic,
+                sequence=bucket["seq"],
+                change="refetch",
+                runs=params.runs,
+                span=params.span,
+                channel=params.channel,
+                session_sel=params.session,
+            )
+        return types.SystemEventsSubscribeResult(subscriptionId=sub_id)
 
-        @self.resource(
-            "resource://runs/{run_id}/telemetry/spans/{span_id}/payload",
-            mime_type="application/json",
-            title="Span Payload",
-        )
-        async def _span_payload(run_id: str, span_id: str, ctx: "Context") -> Any:  # type: ignore[name-defined]
-            env = await ctx.wrp.store.get_span_payload(run_id, span_id)
-            if not env:
-                return None
-            env_dict = env.model_dump()
-            return sanitize_envelope_dict(env_dict, ctx.wrp.telemetry_policy)
-
-        # ---- Spans (derived from plaintext telemetry events) ---------------
-        @self.resource(
-            "resource://runs/{run_id}/telemetry/spans",
-            mime_type="application/json",
-            title="Span Index",
-        )
-        async def _spans(run_id: str, ctx: "Context") -> Any:  # type: ignore[name-defined]
-            # Load only span-kind events for this run, ascending by ts
-            events = await ctx.wrp.store.load_telemetry(run_id, kinds={"span"})
-            spans = build_span_index(events)
-            return serialize_span_list(spans)
-
-        @self.resource(
-            "resource://runs/{run_id}/telemetry/spans/{span_id}",
-            mime_type="application/json",
-            title="Span Detail",
-        )
-        async def _span_detail(run_id: str, span_id: str, ctx: "Context") -> Any:  # type: ignore[name-defined]
-            events = await ctx.wrp.store.load_telemetry(run_id, kinds={"span"})
-            spans = build_span_index(events)
-            return serialize_span_detail(spans, span_id)
-
-    def _register_builtin_workflow_settings_endpoints(self) -> None:
-        """Expose workflow settings read/schema as resources and a simple HTTP mutation endpoint."""
-        # MCP resources (read-only)
-        @self.resource(
-            "resource://workflows/{workflow}/settings",
-            mime_type="application/json",
-            title="Workflow Settings",
-        )
-        async def _wf_settings_resource(workflow: str, ctx: "Context") -> Any:  # type: ignore[name-defined]
-            await self._workflow_manager.load_persisted_settings_if_needed(workflow)
-            cur = self._workflow_manager.get_settings(workflow)
-            if cur is None:
-                return None
-            wf = self._workflow_manager.get(workflow)
-            return {
-                "values": cur.model_dump(),
-                "overridden": self._workflow_manager.settings_overridden(workflow),
-                "allowOverride": bool(wf.settings_allow_override) if wf else False,
-                "locked": list(getattr(cur.__class__, "locked", set())),
-            }
-
-        @self.resource(
-            "resource://workflows/{workflow}/settings/schema",
-            mime_type="application/json",
-            title="Workflow Settings Schema",
-        )
-        async def _wf_settings_schema_resource(workflow: str, ctx: "Context") -> Any:  # type: ignore[name-defined]
-            wf = self._workflow_manager.get(workflow)
-            if not wf or wf.settings_default is None:
-                return None
-            return wf.settings_default.__class__.model_json_schema(by_alias=True)
-
-        # HTTP route for GET/PUT
-        async def _wf_settings_http(request: Request) -> Response:
-            workflow = request.path_params.get("workflow")
-            if request.method == "GET":
-                await self._workflow_manager.load_persisted_settings_if_needed(workflow)
-                cur = self._workflow_manager.get_settings(workflow)
-                if cur is None:
-                    return JSONResponse(None)
-                wf = self._workflow_manager.get(workflow)
-                return JSONResponse({
-                    "values": cur.model_dump(),
-                    "overridden": self._workflow_manager.settings_overridden(workflow),
-                    "allowOverride": bool(wf.settings_allow_override) if wf else False,
-                    "locked": list(getattr(cur.__class__, "locked", set())),
-                })
-            # PUT -> merge (partial upsert)
+    async def _system_events_unsubscribe(self, params: types.SystemEventsUnsubscribeParams) -> None:
+        key = None
+        if params.subscriptionId and params.subscriptionId in self._event_subscription_index:
+            key = self._event_subscription_index.pop(params.subscriptionId, None)
+        if key is None:
+            key = (
+                self._system_event_key(
+                    params.topic, runs=params.runs, span=params.span, channel=params.channel, session_sel=params.session
+                )
+                if params.topic
+                else None
+            )
+        if key and key in self._event_subscriptions:
+            # best-effort: remove current session from bucket
             try:
-                body = await request.json()
+                ctx = self.get_context()
+                sess = ctx.request_context.session
+                self._event_subscriptions[key]["subs"].discard(sess)  # type: ignore[index]
             except Exception:
-                return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-            try:
-                inst = await self._workflow_manager.update_settings(workflow, body or {})
-                wf = self._workflow_manager.get(workflow)
-                return JSONResponse({
-                    "values": inst.model_dump(),
-                    "overridden": True,
-                    "allowOverride": bool(wf.settings_allow_override) if wf else False,
-                    "locked": list(getattr(inst.__class__, "locked", set())),
-                })
-            except Exception as e:
-                return JSONResponse({"error": str(e)}, status_code=400)
+                pass
 
-        self._custom_starlette_routes.append(
-            Route("/workflows/{workflow}/settings", endpoint=_wf_settings_http, methods=["GET", "PUT"])
+    async def _emit_system_event(
+        self,
+        *,
+        topic: types.Topic,
+        change: types.ChangeKind | None,
+        runs: types.RunsScope | None = None,
+        span: types.SpanScope | None = None,
+        channel: types.ChannelScope | None = None,
+        session_sel: types.SystemSessionScope | None = None,
+    ) -> None:
+        """Fan-out an events/updated to matching subscribers."""
+        key = self._system_event_key(topic, runs=runs, span=span, channel=channel, session_sel=session_sel)
+        bucket = self._event_subscriptions.get(key)
+        if not bucket:
+            return
+        bucket["seq"] += 1
+        seq = bucket["seq"]
+        subs = list(bucket["subs"])  # copy
+        for s in subs:
+            try:
+                await s.send_system_events_updated(
+                    topic=topic,
+                    sequence=seq,
+                    change=change,
+                    runs=runs,
+                    span=span,
+                    channel=channel,
+                    session_sel=session_sel,
+                )
+            except Exception:
+                try:
+                    bucket["subs"].discard(s)
+                except Exception:
+                    pass
+
+    # -------------------------
+    # System handler impls
+    # -------------------------
+    async def _find_run_span_id(self, system_session_id: str, run_id: str) -> str | None:
+        events = await self.store.load_telemetry(system_session_id, run_id)
+        for ev in events:
+            if (
+                getattr(ev, "kind", None) == "span"
+                and getattr(ev, "span_kind", None) == "run"
+                and getattr(ev, "phase", None) == "start"
+            ):
+                return getattr(ev, "span_id", None)
+        return None
+
+    async def _runs_list(self, params: types.RunsListRequestParams) -> types.RunsListResult:
+        sess = params.system_session.system_session_id
+        runs = await self.store.list_runs(
+            sess,
+            workflow_name=params.workflow,
+            thread_id=params.thread_id,
+            state=params.state,
+            outcome=params.outcome,
         )
+        return types.RunsListResult(runs=runs)
+
+    async def _runs_read(self, runs: types.RunsScope) -> types.RunsReadResult:
+        meta = await self.store.get_run(runs.system_session_id, runs.run_id)
+        return types.RunsReadResult(run=meta)
+
+    async def _runs_input_read(self, runs: types.RunsScope) -> types.RunsIOReadResult:
+        system_session_id = runs.system_session_id
+        run_id = runs.run_id
+        span_id = await self._find_run_span_id(system_session_id, run_id)
+        meta = await self.store.get_run(system_session_id, run_id)
+        workflow = meta.workflow_name if meta else None
+        wf = self._workflow_manager.get(workflow) if workflow else None
+        schema = wf.input_schema if wf else None
+        if not span_id:
+            return types.RunsIOReadResult(
+                data=None,
+                workflow=workflow,
+                schema=schema,
+                system_session_id=system_session_id,
+                run_id=run_id,
+            )
+        env = await self.store.get_span_payload(system_session_id, run_id, span_id)
+        if not env:
+            return types.RunsIOReadResult(
+                data=None,
+                workflow=workflow,
+                schema=schema,
+                system_session_id=system_session_id,
+                run_id=run_id,
+            )
+        env_dict = env.model_dump()
+        sanitized = sanitize_envelope_dict(env_dict, self._telemetry_policy)
+        part = sanitized.get("capture", {}).get("start")
+        return types.RunsIOReadResult(
+            data=part.get("data") if part else None,
+            workflow=workflow,
+            schema=schema,
+            system_session_id=system_session_id,
+            run_id=run_id,
+        )
+
+    async def _runs_output_read(self, runs: types.RunsScope) -> types.RunsIOReadResult:
+        system_session_id = runs.system_session_id
+        run_id = runs.run_id
+        span_id = await self._find_run_span_id(system_session_id, run_id)
+        meta = await self.store.get_run(system_session_id, run_id)
+        workflow = meta.workflow_name if meta else None
+        wf = self._workflow_manager.get(workflow) if workflow else None
+        schema = wf.output_schema if wf else None
+        if not span_id:
+            return types.RunsIOReadResult(
+                data=None,
+                workflow=workflow,
+                schema=schema,
+                system_session_id=system_session_id,
+                run_id=run_id,
+            )
+        env = await self.store.get_span_payload(system_session_id, run_id, span_id)
+        if not env:
+            return types.RunsIOReadResult(
+                data=None,
+                workflow=workflow,
+                schema=schema,
+                system_session_id=system_session_id,
+                run_id=run_id,
+            )
+        env_dict = env.model_dump()
+        sanitized = sanitize_envelope_dict(env_dict, self._telemetry_policy)
+        part = sanitized.get("capture", {}).get("end")
+        return types.RunsIOReadResult(
+            data=part.get("data") if part else None,
+            workflow=workflow,
+            schema=schema,
+            system_session_id=system_session_id,
+            run_id=run_id,
+        )
+
+    async def _telemetry_spans_list(self, runs: types.RunsScope) -> types.TelemetrySpansListResult:
+        events = await self.store.load_telemetry(runs.system_session_id, runs.run_id, kinds={"span"})
+        spans = build_span_index(
+            events,
+            mask_model=self._telemetry_policy.mask_model_in_spans,
+            mask_tool=self._telemetry_policy.mask_tool_names_in_spans,
+        )
+        return types.TelemetrySpansListResult(spans=list_span_views(spans))
+
+    async def _telemetry_span_read(self, span: types.SpanScope) -> types.TelemetrySpanReadResult:
+        events = await self.store.load_telemetry(span.system_session_id, span.run_id, kinds={"span"})
+        spans = build_span_index(
+            events,
+            mask_model=self._telemetry_policy.mask_model_in_spans,
+            mask_tool=self._telemetry_policy.mask_tool_names_in_spans,
+        )
+        return types.TelemetrySpanReadResult(span=get_span_view(spans, span.span_id))
+
+    async def _telemetry_payload_read(self, span: types.SpanScope) -> types.TelemetryPayloadReadResult:
+        env = await self.store.get_span_payload(span.system_session_id, span.run_id, span.span_id)
+        if not env:
+            return types.TelemetryPayloadReadResult(payload=None)
+        sanitized = sanitize_envelope_dict(env.model_dump(), self._telemetry_policy)
+        return types.TelemetryPayloadReadResult(payload=SpanPayloadEnvelope.model_validate(sanitized))
+
+    async def _conversations_channels_list(self, runs: types.RunsScope) -> types.ChannelsListResult:
+        # Gate index listing if entirely private-only
+        if is_private_only_conversations_selector(self._conversation_policy, channel=None):
+            raise PermissionError(
+                "Listing denied: channels index is private under current conversation policy."
+            )
+        metas = await self.store.list_channel_meta(runs.system_session_id, runs.run_id)
+        return types.ChannelsListResult(channels=metas)
+
+    async def _conversations_channel_read(
+        self, channel: types.ChannelScope
+    ) -> types.ChannelReadResult:
+        # Deny if this channel would be private-only under policy
+        if is_private_only_conversations_selector(self._conversation_policy, channel=channel.channel):
+            raise PermissionError("Read denied: channel is private under current conversation policy.")
+
+        # meta
+        metas = await self.store.list_channel_meta(channel.system_session_id, channel.run_id)
+        meta = next((m for m in metas if m.id == channel.channel), ChannelMeta(id=channel.channel))
+        # raw items (per channel), then sanitize
+        raw_items = await self.store.load_channel_items(channel.system_session_id, channel.run_id, channel=channel.channel)
+        sanitized = sanitize_conversation_items(raw_items, self._conversation_policy)
+        ch = ChannelView(meta=meta, items=sanitized)
+        return types.ChannelReadResult(channel=ch)
+
+    async def _system_sessions_list(self) -> types.SystemSessionsListResult:
+        sess = await self.store.list_system_sessions()
+        return types.SystemSessionsListResult(sessions=sess)
+
+    async def _system_session_read(self, session: types.SystemSessionScope) -> types.SystemSessionReadResult:
+        s = await self.store.get_system_session(session.system_session_id)
+        return types.SystemSessionReadResult(session=s if s else None)
 
     def get_context(self) -> Context[ServerSession, LifespanResultT, Request]:
         """
@@ -560,11 +701,11 @@ class WRP(Generic[LifespanResultT]):
     def set_default_seeding(self, seeding: WorkflowConversationSeeding | None) -> None:
         self._default_seeding = seeding
 
-    async def list_workflows(self) -> ListWorkflowsResult:
+    async def _list_workflows(self) -> types.ListWorkflowsResult:
         """Return public descriptors for all registered workflows (no pagination)."""
-        return ListWorkflowsResult(workflows=self._workflow_manager.list_descriptors())
+        return types.ListWorkflowsResult(workflows=self._workflow_manager.list_descriptors())
 
-    async def run_workflow(self, name: str, wf_input: dict[str, Any]) -> RunWorkflowResult:
+    async def _run_workflow(self, name: str, wf_input: dict[str, Any]) -> RunWorkflowResult:
         """Run a workflow by name with a dict payload matching its WorkflowInput.
 
         Note: This uses the current request context if available. Outside a request,
@@ -576,7 +717,7 @@ class WRP(Generic[LifespanResultT]):
         await self._workflow_manager.load_persisted_settings_if_needed(name)
         return await self._workflow_manager.run(name, wf_input, context)
 
-    async def list_resources(self) -> list[MCPResource]:
+    async def _list_resources(self) -> list[MCPResource]:
         """List all available resources."""
 
         resources = self._resource_manager.list_resources()
@@ -592,7 +733,7 @@ class WRP(Generic[LifespanResultT]):
             for resource in resources
         ]
 
-    async def list_resource_templates(self) -> list[MCPResourceTemplate]:
+    async def _list_resource_templates(self) -> list[MCPResourceTemplate]:
         templates = self._resource_manager.list_templates()
         return [
             MCPResourceTemplate(
@@ -606,7 +747,7 @@ class WRP(Generic[LifespanResultT]):
             for template in templates
         ]
 
-    async def read_resource(self, uri: AnyUrl | str) -> Iterable[ReadResourceContents]:
+    async def _read_resource(self, uri: AnyUrl | str) -> Iterable[ReadResourceContents]:
         """Read a resource by URI."""
 
         context = self.get_context()
@@ -823,6 +964,52 @@ class WRP(Generic[LifespanResultT]):
 
         return decorator
 
+    # ---- Provider / Agent settings registration APIs ---------------------
+
+    def register_provider_settings(
+        self,
+        name: str,
+        default: ProviderSettings,
+        *,
+        allow_override: bool = True,
+    ) -> None:
+        """
+        Register provider-level settings defaults.
+
+        These are global (non-workflow) and typically include API keys and
+        other provider configuration such as endpoint URLs.
+        """
+        self._provider_settings_registry.register(name, default, allow_override=allow_override)
+
+    def get_provider_settings(self, name: str) -> ProviderSettings | None:
+        """
+        Return a deep copy of the effective ProviderSettings for the given provider.
+        """
+        cfg = self._provider_settings_registry.get(name)
+        return cfg.copy(deep=True) if cfg is not None else None
+
+    def register_agent_settings(
+        self,
+        name: str,
+        default: AgentSettings,
+        *,
+        allow_override: bool = True,
+    ) -> None:
+        """
+        Register agent-level settings defaults.
+
+        These are global configuration blobs keyed by agent name and usually
+        reference a provider via `provider_name`.
+        """
+        self._agent_settings_registry.register(name, default, allow_override=allow_override)
+
+    def get_agent_settings(self, name: str) -> AgentSettings | None:
+        """
+        Return a deep copy of the effective AgentSettings for the given agent.
+        """
+        cfg = self._agent_settings_registry.get(name)
+        return cfg.copy(deep=True) if cfg is not None else None
+
     def custom_route(
         self,
         path: str,
@@ -869,6 +1056,8 @@ class WRP(Generic[LifespanResultT]):
 
     async def run_stdio_async(self) -> None:
         """Run the server using stdio transport."""
+        # Ensure provider/agent settings are hydrated from the store before serving.
+        await hydrate_provider_and_agent_settings(self)
         async with stdio_server() as (read_stream, write_stream):
             await self._wrp_server.run(
                 read_stream,
@@ -880,6 +1069,8 @@ class WRP(Generic[LifespanResultT]):
         """Run the server using SSE transport."""
         import uvicorn
 
+        # Hydrate settings before creating the app / accepting connections.
+        await hydrate_provider_and_agent_settings(self)
         starlette_app = self.sse_app(mount_path)
 
         config = uvicorn.Config(
@@ -895,6 +1086,8 @@ class WRP(Generic[LifespanResultT]):
         """Run the server using StreamableHTTP transport."""
         import uvicorn
 
+        # Hydrate settings before creating the app / accepting connections.
+        await hydrate_provider_and_agent_settings(self)
         starlette_app = self.streamable_http_app()
 
         config = uvicorn.Config(
@@ -1176,6 +1369,137 @@ class WRP(Generic[LifespanResultT]):
             lifespan=lambda app: self.session_manager.run(),
         )
 
+    # ---- Workflow settings protocol handlers (runtime mechanics) ----
+    async def _wf_settings_read(self, workflow: str) -> types.WorkflowSettingsReadResult:
+        """Return effective settings + flags for a workflow."""
+        await self._workflow_manager.load_persisted_settings_if_needed(workflow)
+        cur = self._workflow_manager.get_settings(workflow)
+        wf = self._workflow_manager.get(workflow)
+        if cur is None:
+            return types.WorkflowSettingsReadResult(
+                values=None,
+                overridden=self._workflow_manager.settings_overridden(workflow),
+                allowOverride=bool(wf.settings_allow_override) if wf else False,
+                locked=None,
+            )
+        return types.WorkflowSettingsReadResult(
+            values=cur.model_dump(),
+            overridden=self._workflow_manager.settings_overridden(workflow),
+            allowOverride=bool(wf.settings_allow_override) if wf else False,
+            locked=list(getattr(cur.__class__, "locked", set())),
+        )
+
+    async def _wf_settings_schema(self, workflow: str) -> types.WorkflowSettingsSchemaResult:
+        """Return JSON schema for a workflow's settings (if defined)."""
+        wf = self._workflow_manager.get(workflow)
+        if not wf or wf.settings_default is None:
+            return types.WorkflowSettingsSchemaResult(schema=None)
+        return types.WorkflowSettingsSchemaResult(
+            schema=wf.settings_default.__class__.model_json_schema(by_alias=True)
+        )
+
+    async def _wf_settings_update(self, workflow: str, values: dict[str, Any]) -> types.WorkflowSettingsReadResult:
+        """Merge/update workflow settings and return the effective view."""
+        inst = await self._workflow_manager.update_settings(workflow, values or {})
+        wf = self._workflow_manager.get(workflow)
+        return types.WorkflowSettingsReadResult(
+            values=inst.model_dump(),
+            overridden=True,
+            allowOverride=bool(wf.settings_allow_override) if wf else False,
+            locked=list(getattr(inst.__class__, "locked", set())),
+        )
+
+    # ---- Provider settings protocol handlers ------------------------------
+    async def _provider_settings_read(self, provider: str) -> types.ProviderSettingsReadResult:
+        """Return effective settings + flags for a provider."""
+        await self._provider_settings_registry.load_persisted_if_needed(provider)
+        cur = self._provider_settings_registry.get(provider)
+        if cur is None:
+            return types.ProviderSettingsReadResult(
+                values=None,
+                overridden=self._provider_settings_registry.settings_overridden(provider),
+                allowOverride=self._provider_settings_registry.allow_override(provider),
+                locked=None,
+                secrets=None,
+            )
+        values, secrets = self._provider_settings_registry.mask_values(cur)
+        secrets_view = (
+            {k: types.ProviderSecretSummary(hasValue=v["hasValue"]) for k, v in secrets.items()}
+            if secrets
+            else None
+        )
+        return types.ProviderSettingsReadResult(
+            values=values,
+            overridden=self._provider_settings_registry.settings_overridden(provider),
+            allowOverride=self._provider_settings_registry.allow_override(provider),
+            locked=list(getattr(cur.__class__, "locked", set())),
+            secrets=secrets_view,
+        )
+
+    async def _provider_settings_schema(self, provider: str) -> types.ProviderSettingsSchemaResult:
+        """Return JSON schema for a provider's settings (if defined)."""
+        schema = self._provider_settings_registry.schema_for(provider)
+        return types.ProviderSettingsSchemaResult(schema=schema)
+
+    async def _provider_settings_update(
+        self,
+        provider: str,
+        values: dict[str, Any],
+    ) -> types.ProviderSettingsReadResult:
+        """Merge/update provider settings and return the effective view."""
+        inst = await self._provider_settings_registry.update(provider, values or {})
+        masked_values, secrets = self._provider_settings_registry.mask_values(inst)
+        secrets_view = (
+            {k: types.ProviderSecretSummary(hasValue=v["hasValue"]) for k, v in secrets.items()}
+            if secrets
+            else None
+        )
+        return types.ProviderSettingsReadResult(
+            values=masked_values,
+            overridden=True,
+            allowOverride=self._provider_settings_registry.allow_override(provider),
+            locked=list(getattr(inst.__class__, "locked", set())),
+            secrets=secrets_view,
+        )
+
+    # ---- Agent settings protocol handlers --------------------------------
+    async def _agent_settings_read(self, agent: str) -> types.AgentSettingsReadResult:
+        """Return effective settings + flags for an agent."""
+        await self._agent_settings_registry.load_persisted_if_needed(agent)
+        cur = self._agent_settings_registry.get(agent)
+        if cur is None:
+            return types.AgentSettingsReadResult(
+                values=None,
+                overridden=self._agent_settings_registry.settings_overridden(agent),
+                allowOverride=self._agent_settings_registry.allow_override(agent),
+                locked=None,
+            )
+        return types.AgentSettingsReadResult(
+            values=cur.model_dump(),
+            overridden=self._agent_settings_registry.settings_overridden(agent),
+            allowOverride=self._agent_settings_registry.allow_override(agent),
+            locked=list(getattr(cur.__class__, "locked", set())),
+        )
+
+    async def _agent_settings_schema(self, agent: str) -> types.AgentSettingsSchemaResult:
+        """Return JSON schema for an agent's settings (if defined)."""
+        schema = self._agent_settings_registry.schema_for(agent)
+        return types.AgentSettingsSchemaResult(schema=schema)
+
+    async def _agent_settings_update(
+        self,
+        agent: str,
+        values: dict[str, Any],
+    ) -> types.AgentSettingsReadResult:
+        """Merge/update agent settings and return the effective view."""
+        inst = await self._agent_settings_registry.update(agent, values or {})
+        return types.AgentSettingsReadResult(
+            values=inst.model_dump(),
+            overridden=True,
+            allowOverride=self._agent_settings_registry.allow_override(agent),
+            locked=list(getattr(inst.__class__, "locked", set())),
+        )
+
 
 class StreamableHTTPASGIApp:
     """
@@ -1294,7 +1618,7 @@ class Context(BaseModel, Generic[ServerSessionT, LifespanContextT, RequestT]):
             The resource content as either text or bytes
         """
         assert self._wrp is not None, "Context is not available outside of a request"
-        return await self._wrp.read_resource(uri)
+        return await self._wrp._read_resource(uri)
 
     async def elicit(
         self,
@@ -1355,6 +1679,17 @@ class Context(BaseModel, Generic[ServerSessionT, LifespanContextT, RequestT]):
         return getattr(self.request_context.meta, "client_id", None) if self.request_context.meta else None
 
     @property
+    def system_session_id(self) -> str | None:
+        """Get the system session ID if available."""
+        req = getattr(self.request_context, "request", None)
+        if isinstance(req, dict):
+            wrp_ns = req.get("wrp") or {}
+            val = wrp_ns.get("system_session")
+            if isinstance(val, str) and val:
+                return val
+        return None
+
+    @property
     def request_id(self) -> str:
         """Get the unique ID for this request."""
         return str(self.request_context.request_id)
@@ -1393,3 +1728,17 @@ class Context(BaseModel, Generic[ServerSessionT, LifespanContextT, RequestT]):
         cfg = self.wrp._workflow_manager.get_settings(wf_name)
         # Hand workflows a deep copy so in-process mutations don't persist.
         return cfg.copy(deep=True) if cfg is not None else None
+
+    def get_provider_settings(self, name: str) -> ProviderSettings | None:
+        """
+        Return the effective ProviderSettings for the given provider name.
+        """
+        cfg = self.wrp.get_provider_settings(name)
+        return cfg
+
+    def get_agent_settings(self, name: str) -> AgentSettings | None:
+        """
+        Return the effective AgentSettings for the given agent name.
+        """
+        cfg = self.wrp.get_agent_settings(name)
+        return cfg

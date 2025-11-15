@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from wrp.server.runtime.exceptions import RunStateError, WorkflowMarkedError, WorkflowMarkedFailure
 
-from wrp.server.runtime.conversations.seeding import ConversationSeeding, RunFilter, default_conversation_seeding
+from wrp.server.runtime.conversations.seeding import ConversationSeeding, SeedingRunFilter, default_conversation_seeding
 from .types import RunOutcome, RunState
 from ..telemetry.service import RunTelemetryService
 from wrp.server.runtime.conversations.service import ConversationsService
@@ -22,7 +22,7 @@ class RunBindings(BaseModel):
     thread_id: str | None = None
 
     conversation_seeding: ConversationSeeding = Field(default_factory=default_conversation_seeding)
-    run_filter: RunFilter = Field(default_factory=RunFilter)
+    seeding_run_filter: SeedingRunFilter = Field(default_factory=SeedingRunFilter)
 
     conversations: ConversationsService
     telemetry: RunTelemetryService
@@ -33,14 +33,15 @@ class RunBindings(BaseModel):
         Mark the run as 'failed' (business failure), persist optional structured output,
         then raise an internal signal to unwind the workflow.
         """
-        meta = await self.conversations._store.get_run(self.run_id)
+        sid = self.conversations._run.system_session_id
+        meta = await self.conversations._store.get_run(sid, self.run_id)
         if meta and meta.state == RunState.concluded:
             raise RunStateError("Run already concluded")
         # coerce output if it's a pydantic model
         if output is not None and hasattr(output, "model_dump"):
             output = output.model_dump()  # type: ignore[attr-defined]
         await self.conversations._store.conclude_run(
-            self.run_id, RunOutcome.failed, error=reason, run_output=output  # type: ignore[arg-type]
+            sid, self.run_id, RunOutcome.failed, error=reason, run_output=output
         )
         raise WorkflowMarkedFailure(reason)
 
@@ -49,8 +50,9 @@ class RunBindings(BaseModel):
         Mark the run as 'error' (technical fault), persist optional structured details,
         then raise an internal signal to unwind the workflow.
         """
-        meta = await self.conversations._store.get_run(self.run_id)
+        sid = self.conversations._run.system_session_id
+        meta = await self.conversations._store.get_run(sid, self.run_id)
         if meta and meta.state == RunState.concluded:
             raise RunStateError("Run already concluded")
-        await self.conversations._store.conclude_run(self.run_id, RunOutcome.error, error=reason, run_output=output)
+        await self.conversations._store.conclude_run(sid, self.run_id, RunOutcome.error, error=reason, run_output=output)
         raise WorkflowMarkedError(reason)

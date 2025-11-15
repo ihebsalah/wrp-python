@@ -27,7 +27,7 @@ from .types import (
     WorkflowInput,
     WorkflowOutput,
 )
-from .settings import WorkflowSettings
+from wrp.server.runtime.settings.workflows import WorkflowSettings
 from wrp.server.runtime.store.base import Store
 
 if TYPE_CHECKING:
@@ -271,38 +271,49 @@ class WorkflowManager:
         req_data = getattr(ctx.request_context, "request", None)
         opts = parse_run_request_options(req_data)
         # NOTE: parse_run_request_options expects a dict-like object; the server preserves the original request data.
+        if not opts.system_session_id:
+            return RunWorkflowResult(isError=True, error="Missing wrp.system_session in request")
+        # ensure session exists
+        try:
+            await ctx.wrp.store.ensure_system_session(opts.system_session_id, opts.system_session_name)
+        except Exception:
+            return RunWorkflowResult(isError=True, error="Failed to initialize system_session")
+
         # Effective seeding source: workflow-specific overrides global; caller meta can still override
         # unless 'deny_seeding' is set by the effective source.
         effective_seeding = wf.seeding or ctx.wrp.default_seeding
         # Merge with effective seeding (author overrides caller when deny=true; otherwise provide defaults)
         if effective_seeding and effective_seeding.deny_seeding:
             # hard block any cross-run seeding
-            from wrp.server.runtime.conversations.seeding import ConversationSeedingNone, RunFilter as _RunFilter
+            from wrp.server.runtime.conversations.seeding import ConversationSeedingNone, SeedingRunFilter as _SeedingRunFilter
 
             opts.conversation_seeding = ConversationSeedingNone()
-            opts.run_filter = _RunFilter()
+            opts.seeding_run_filter = _SeedingRunFilter()
         elif (effective_seeding is not None) and (not opts.conversation_seeding_specified):
             # apply author's/global default only if caller didn't supply seeding settings
             opts.conversation_seeding = effective_seeding.default_seeding
 
         # Create the run record and persist it.
         store = ctx.wrp.store
-        # Allocate simple 3-digit run id (001..999) within (workflow, thread) scope
-        run_id = await store.alloc_run_id(wf.name, opts.thread_id)
-        meta = RunMeta(run_id=run_id, workflow_name=wf.name, thread_id=opts.thread_id)
+        # Allocate simple 3-digit run id (001..999) within the *system session* scope
+        run_id = await store.alloc_run_id(opts.system_session_id, wf.name, opts.thread_id)
+        meta = RunMeta(
+            system_session_id=opts.system_session_id,
+            run_id=run_id,
+            workflow_name=wf.name,
+            thread_id=opts.thread_id,
+        )
         await store.create_run(meta)
 
         # Bind author-facing façades into ctx.run, making them available to the workflow.
-        # Channel defaults/limits from the effective seeding (workflow > server default)
-        default_channels = (effective_seeding.default_channels if effective_seeding else ["default"])
+        # Allowed channels define where cross-run seeding is permitted (same-channel only).
         allowed_channels = (effective_seeding.allowed_channels if effective_seeding else None)
 
         conversations_service = ConversationsService(
             store,
             meta,
             conversation_seeding=opts.conversation_seeding,
-            run_filter=opts.run_filter,
-            default_channels=default_channels,
+            seeding_run_filter=opts.seeding_run_filter,
             allowed_channels=allowed_channels,
             on_update=ctx.wrp.notify_resource_updated,
         )
@@ -316,26 +327,24 @@ class WorkflowManager:
             workflow_name=wf.name,
             thread_id=opts.thread_id,
             conversation_seeding=opts.conversation_seeding,
-            run_filter=opts.run_filter,
+            seeding_run_filter=opts.seeding_run_filter,
             conversations=conversations_service,
             telemetry=telemetry_service,
         )
         ctx._attach_run(bindings)
 
         # Build run settings for telemetry using the same effective source.
-        default_channels = (effective_seeding.default_channels if effective_seeding else ["default"])
         allowed_channels = (effective_seeding.allowed_channels if effective_seeding else None)
         seeding_deny = (effective_seeding.deny_seeding if effective_seeding else False)
 
         run_settings = RunSettings(
             conversation_seeding=opts.conversation_seeding,
-            run_filter=opts.run_filter,
+            seeding_run_filter=opts.seeding_run_filter,
             ignore_thread=opts.ignore_thread,
-            default_channels=default_channels,
             allowed_channels=allowed_channels,
             seeding_deny=seeding_deny,
             conversation_seeding_specified=opts.conversation_seeding_specified,
-            run_filter_specified=opts.run_filter_specified,
+            seeding_run_filter_specified=opts.seeding_run_filter_specified,
         )
 
         # run-level span to trace the entire workflow execution.
@@ -353,7 +362,7 @@ class WorkflowManager:
 
             # Conclude the run successfully. Output is captured as a telemetry payload, not on the run record itself.
             try:
-                await store.conclude_run(run_id, RunOutcome.success, run_output=None)
+                await store.conclude_run(opts.system_session_id, run_id, RunOutcome.success, run_output=None)
             finally:
                 await ctx.run.telemetry.run_end(
                     span_id=run_span_id,
@@ -396,7 +405,9 @@ class WorkflowManager:
             return RunWorkflowResult(isError=True, error=str(e))
         except WorkflowError as e:
             # Controlled, user-facing error; conclude here.
-            await store.conclude_run(run_id, RunOutcome.error, error=str(e), run_output=None)
+            await store.conclude_run(
+                opts.system_session_id, run_id, RunOutcome.error, error=str(e), run_output=None
+            )
             try:
                 await ctx.run.telemetry.run_end(
                     span_id=run_span_id,
@@ -411,7 +422,9 @@ class WorkflowManager:
             return RunWorkflowResult(isError=True, error=str(e))
         except Exception as e:  # Defensive: unexpected crash
             logger.exception("Unexpected exception while running workflow '%s'", name)
-            await store.conclude_run(run_id, RunOutcome.error, error=str(e), run_output=None)
+            await store.conclude_run(
+                opts.system_session_id, run_id, RunOutcome.error, error=str(e), run_output=None
+            )
             try:
                 await ctx.run.telemetry.run_end(
                     span_id=run_span_id,

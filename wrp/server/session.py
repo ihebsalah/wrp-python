@@ -199,6 +199,34 @@ class ServerSession(
             )
         )
 
+    async def send_system_events_updated(
+        self,
+        *,
+        topic: types.Topic,
+        sequence: int,
+        change: types.ChangeKind | None,
+        runs: types.RunsScope | None = None,
+        span: types.SpanScope | None = None,
+        channel: types.ChannelScope | None = None,
+        session_sel: types.SystemSessionScope | None = None,
+    ) -> None:
+        """Send a system events updated notification."""
+        await self.send_notification(
+            types.ServerNotification(
+                types.SystemEventsUpdatedNotification(
+                    params=types.SystemEventsUpdatedParams(
+                        topic=topic,
+                        sequence=sequence,
+                        change=change,
+                        runs=runs,
+                        span=span,
+                        channel=channel,
+                        session=session_sel,
+                    )
+                )
+            )
+        )
+
     async def list_roots(self) -> types.ListRootsResult:
         """Send a roots/list request."""
         return await self.send_request(

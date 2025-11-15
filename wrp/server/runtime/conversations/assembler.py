@@ -1,15 +1,15 @@
 # wrp/server/runtime/conversations/assembler.py
 from __future__ import annotations
 
-from typing import Iterable, Optional, Set
+from typing import Iterable, Optional, Set, List
 
 from .seeding import (
     ConversationSeeding,
     ConversationSeedingNone,
     ConversationSeedingWindow,
-    RunFilter,
+    SeedingRunFilter,
 )
-from .types import ConversationItem
+from .types import ChannelItem
 from wrp.server.runtime.runs.types import RunMeta
 from wrp.server.runtime.store.base import Store
 
@@ -17,17 +17,18 @@ from wrp.server.runtime.store.base import Store
 async def select_runs(
     store: Store,
     *,
+    system_session_id: str,
     workflow_name: str,
     thread_id: str | None,
-    run_filter: RunFilter,
+    seeding_run_filter: SeedingRunFilter,
     exclude_run_id: str | None = None,
 ) -> list[RunMeta]:
     """Resolve which runs contribute to the seed, ordered by created_at asc."""
     # include_runs wins outright
-    if run_filter.include_runs:
+    if seeding_run_filter.include_runs:
         metas: list[RunMeta] = []
-        for rid in run_filter.include_runs:
-            meta = await store.get_run(rid)
+        for rid in seeding_run_filter.include_runs:
+            meta = await store.get_run(system_session_id, rid)
             if meta and meta.workflow_name == workflow_name:
                 if exclude_run_id is None or meta.run_id != exclude_run_id:
                     metas.append(meta)
@@ -36,25 +37,25 @@ async def select_runs(
     if not thread_id:
         return []
 
-    candidates = await store.runs_in_thread(workflow_name, thread_id)
+    candidates = await store.runs_in_thread(system_session_id, workflow_name, thread_id)
 
     # since / until
-    if run_filter.since_run_id:
+    if seeding_run_filter.since_run_id:
         try:
-            idx = next(i for i, m in enumerate(candidates) if m.run_id == run_filter.since_run_id)
+            idx = next(i for i, m in enumerate(candidates) if m.run_id == seeding_run_filter.since_run_id)
             candidates = candidates[idx + 1 :]  # exclusive
         except StopIteration:
             # If the since_run_id is not found, ignore the filter.
             pass
-    if run_filter.until_run_id:
+    if seeding_run_filter.until_run_id:
         try:
-            idx = next(i for i, m in enumerate(candidates) if m.run_id == run_filter.until_run_id)
+            idx = next(i for i, m in enumerate(candidates) if m.run_id == seeding_run_filter.until_run_id)
             candidates = candidates[: idx + 1]  # inclusive
         except StopIteration:
             pass
 
     # exclude list
-    excl = set(run_filter.exclude_runs or [])
+    excl = set(seeding_run_filter.exclude_runs or [])
     seen = set()
     out = []
     for m in candidates:
@@ -67,27 +68,38 @@ async def select_runs(
 
 async def _load_tail(
     store: Store,
+    system_session_id: str,
     run_id: str,
     *,
     limit: int,
     channels: Optional[Set[str]],
-) -> list[ConversationItem]:
+) -> List[ChannelItem]:
     """
-    Load the last `limit` conversation items from a run, with optional channel filtering.
-
-    This helper delegates to the store’s tail-aware method. Stores that don’t
-    override it will hit the default fallback in Store (load all, slice tail).
+    Load the last `limit` conversation items from a run across the given channels,
+    merging per-channel tails and returning the global tail in ascending ts.
     """
-    return await store.load_conversation_tail(run_id, limit=limit, channels=channels)
+    if not channels:
+        # no channel filter: get meta to discover channels, then merge
+        metas = await store.list_channel_meta(system_session_id, run_id)
+        channels = {m.id for m in metas}
+    per_ch: List[ChannelItem] = []
+    for ch in channels:
+        ch_tail = await store.load_channel_items(system_session_id, run_id, channel=ch, limit=limit)
+        per_ch.extend(ch_tail)
+    per_ch.sort(key=lambda i: i.ts)
+    if len(per_ch) > limit:
+        per_ch = per_ch[-limit:]
+    return per_ch
 
 
 async def assemble_seed(
     store: Store,
+    system_session_id: str,
     runs: Iterable[RunMeta],
     seeding: ConversationSeeding,
     *,
     channels: Optional[Set[str]] = None,
-) -> list[ConversationItem]:
+) -> list[ChannelItem]:
     """
     Assemble a seed conversation from a set of runs, applying a Conversation seeding strategy.
 
@@ -101,7 +113,7 @@ async def assemble_seed(
 
     if isinstance(seeding, ConversationSeedingWindow):
         need = seeding.messages
-        out: list[ConversationItem] = []
+        out: list[ChannelItem] = []
 
         # Pull from the newest runs first, as we only need the tail of the
         # combined conversations.
@@ -111,17 +123,16 @@ async def assemble_seed(
         for meta in runs_desc:
             if need <= 0:
                 break
-            # Optional fast-skip: if the store maintains reliable counts, we can
-            # avoid loading a run that has no visible messages.
-            if store.supports_message_counts():
-                if channels:
-                    visible = sum(meta.channel_counts.get(ch, 0) for ch in channels)
-                else:
-                    visible = meta.message_count
-                if visible == 0:
-                    continue
+            # Fast-skip via channel meta: if no messages in the relevant channels, skip
+            metas = await store.list_channel_meta(system_session_id, meta.run_id)
+            if channels:
+                visible = sum((m.itemsCount or 0) for m in metas if m.id in channels)
+            else:
+                visible = sum((m.itemsCount or 0) for m in metas)
+            if visible == 0:
+                continue
             # Load only the portion of the run's tail that we might need.
-            tail = await _load_tail(store, meta.run_id, limit=need, channels=channels)
+            tail = await _load_tail(store, system_session_id, meta.run_id, limit=need, channels=channels)
             # Collect items from each run; we'll do a final sort on the smaller
             # combined list later to establish correct global order.
             out.extend(tail)

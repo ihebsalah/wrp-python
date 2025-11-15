@@ -9,7 +9,7 @@ from wrp.server.runtime.store.base import Store
 
 # Pre-compiled regex for matching span payload URIs.
 PAYLOAD_URI_RE = re.compile(
-    r"^resource://runs/(?P<run_id>[^/]+)/telemetry/spans/(?P<span_id>[^/]+)/payload$"
+    r"^resource://system_sessions/(?P<system_session_id>[^/]+)/runs/(?P<run_id>[^/]+)/telemetry/spans/(?P<span_id>[^/]+)/payload$"
 )
 
 
@@ -44,12 +44,12 @@ async def is_private_only_span_payload_uri(
     if not m:
         return False
 
-    run_id = m.group("run_id")
+    system_session_id = m.group("system_session_id"); run_id = m.group("run_id")
     span_id = m.group("span_id")
 
     # Find span_kind from telemetry (best-effort).
     try:
-        events = await store.load_telemetry(run_id, kinds={"span"})
+        events = await store.load_telemetry(system_session_id, run_id, kinds={"span"})
     except Exception:
         # Fail-closed: if we can't load, treat as private-only
         return True
@@ -58,7 +58,7 @@ async def is_private_only_span_payload_uri(
     if not span_kind:
         # Best-effort fallback: try the span payload envelope (has span_kind)
         try:
-            env = await store.get_span_payload(run_id, span_id)
+            env = await store.get_span_payload(system_session_id, run_id, span_id)
             span_kind = getattr(env, "span_kind", None) if env else None
         except Exception:
             span_kind = None

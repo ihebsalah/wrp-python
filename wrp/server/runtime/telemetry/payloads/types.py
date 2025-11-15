@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Type, Union
 
 from pydantic import BaseModel, Field
 
@@ -35,6 +35,43 @@ class SpanPayloadEnvelope(BaseModel):
     redacted: bool = False
     created_at: datetime = Field(default_factory=_utc_now)
     updated_at: datetime = Field(default_factory=_utc_now)
+
+    class ResolvedPayload(BaseModel):
+        """
+        Single resolved payload for this envelope.
+        - kind: canonical "<span_kind>.<part>" (e.g., "llm.end", "annotation.point")
+        - part: which capture part was used
+        - data: best-effort typed payload instance, or the original dict/primitive if coercion failed
+        """
+        kind: str
+        part: Literal["start", "end", "point"]
+        data: "PayloadData | dict[str, Any] | None"
+
+    def resolve_payload_data(self) -> "SpanPayloadEnvelope.ResolvedPayload | None":
+        """
+        Return the single most relevant payload for this envelope, already coerced to a
+        typed model when possible. If no suitable capture part exists, return None.
+
+        Preference order:
+          - run/agent/llm/tool: "end" then "start"
+          - annotation/handoff/guardrail: "point"
+        """
+        order_by_kind = {
+            "run": ("end", "start"),
+            "agent": ("end", "start"),
+            "llm": ("end", "start"),
+            "tool": ("end", "start"),
+            "annotation": ("point",),
+            "handoff": ("point",),
+            "guardrail": ("point",),
+        }
+        for part in order_by_kind.get(self.span_kind, ("end", "start", "point")):
+            p = self.capture.get(part)
+            if p is None:
+                continue
+            coerced = coerce_payload_data_by_context(self.span_kind, part, p.data)
+            return SpanPayloadEnvelope.ResolvedPayload(kind=f"{self.span_kind}.{part}", part=part, data=coerced)
+        return None
 
 
 # ---------------- Usage types (unchanged API) ----------------
@@ -93,7 +130,7 @@ class PayloadBase(BaseModel):
     model_config = {"extra": "allow"}  # forgiving by default
 
 
-class AgentScoped(BaseModel):
+class AgentScope(BaseModel):
     """
     Mixin for payloads that relate to an agent (agent name/ID).
     """
@@ -107,15 +144,15 @@ class RunPayloadBase(PayloadBase):
     workflow_name: str
 
 
-class AgentPayloadBase(PayloadBase, AgentScoped):
+class AgentPayloadBase(PayloadBase, AgentScope):
     pass
 
 
-class LlmPayloadBase(PayloadBase, AgentScoped):
+class LlmPayloadBase(PayloadBase, AgentScope):
     pass
 
 
-class ToolPayloadBase(PayloadBase, AgentScoped):
+class ToolPayloadBase(PayloadBase, AgentScope):
     tool: str
 
 
@@ -262,3 +299,65 @@ class ToolEndPayload(ToolPayloadBase):
     result: Any | None = None
     # Optional error string; if present we’ll mark the span as error
     error: str | None = None
+
+# ---------------- Typed view helpers (context-based) ----------------
+
+# Union of all concrete payload models we know how to parse.
+PayloadData = Union[
+    RunInputPayload, RunOutputPayload,
+    AgentStartPayload, AgentEndPayload,
+    LlmStartPayload, LlmEndPayload,
+    ToolStartPayload, ToolEndPayload,
+    AnnotationPayload, HandoffPayload, GuardrailResultPayload,
+]
+
+# Map (span_kind, part_name) → model class
+_MODEL_BY_CONTEXT: dict[tuple[str, str], Type[PayloadBase]] = {
+    ("run", "start"): RunInputPayload,
+    ("run", "end"): RunOutputPayload,
+
+    ("agent", "start"): AgentStartPayload,
+    ("agent", "end"): AgentEndPayload,
+
+    ("llm", "start"): LlmStartPayload,
+    ("llm", "end"): LlmEndPayload,
+
+    ("tool", "start"): ToolStartPayload,
+    ("tool", "end"): ToolEndPayload,
+
+    ("annotation", "point"): AnnotationPayload,
+    ("handoff", "point"): HandoffPayload,
+    ("guardrail", "point"): GuardrailResultPayload,
+}
+
+def coerce_payload_data_by_context(
+    span_kind: Literal["run", "agent", "llm", "tool", "handoff", "annotation", "guardrail"],
+    part_name: Literal["start", "end", "point"],
+    data: Any,
+) -> PayloadData | dict[str, Any] | None:
+    """
+    Try to parse an arbitrary `data` into the expected payload model based on
+    (span_kind, capture part_name). On failure, return the original `data`.
+    """
+    if data is None:
+        return None
+
+    # Already a pydantic payload instance?
+    if isinstance(data, PayloadBase):
+        return data  # type: ignore[return-value]
+
+    model = _MODEL_BY_CONTEXT.get((span_kind, part_name))
+    if model is None:
+        # Unknown or mismatched context — do not coerce.
+        return data
+
+    # Dict-like: attempt validation. If it fails (e.g., because author redacted fields),
+    # keep the original value to remain tolerant to masking.
+    if isinstance(data, dict):
+        try:
+            return model.model_validate(data)  # type: ignore[return-value]
+        except Exception:
+            return data
+
+    # Anything else (string "***", list, etc.) — return as-is.
+    return data

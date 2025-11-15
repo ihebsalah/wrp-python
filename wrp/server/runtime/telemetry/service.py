@@ -84,7 +84,7 @@ class RunTelemetryService:
         """
         if (not force) and self._run_concluded:
             return
-        meta = await self._store.get_run(self._run.run_id)
+        meta = await self._store.get_run(self._run.system_session_id, self._run.run_id)
         if (not force) and meta and meta.state == RunState.concluded:
             # Silent no-op after conclusion to avoid surprises in hooks
             self._run_concluded = True
@@ -97,7 +97,7 @@ class RunTelemetryService:
             events = [cast(TelemetryEvent, event_or_events)]
 
         if events:
-            await self._store.append_telemetry(self._run.run_id, events)
+            await self._store.append_telemetry_span_event(self._run.system_session_id, self._run.run_id, events)
 
     # ------------ minimal span plumbing ------------
     def _new_span_id(self) -> str:
@@ -120,7 +120,7 @@ class RunTelemetryService:
 
     def _payload_uri(self, span_id: str) -> str:
         """Generate a resource URI for a span's payload."""
-        return f"resource://runs/{self._run.run_id}/telemetry/spans/{span_id}/payload"
+        return f"resource://system_sessions/{self._run.system_session_id}/runs/{self._run.run_id}/telemetry/spans/{span_id}/payload"
 
     def _to_bytes_for_hash(self, data: Any, mime: str) -> bytes:
         """Serialize data to bytes for hashing, with a canonical JSON fallback."""
@@ -167,7 +167,7 @@ class RunTelemetryService:
             capture=parts,
             redacted=redacted,
         )
-        await self._store.upsert_span_payload(self._run.run_id, envelope)
+        await self._store.upsert_span_payload(self._run.system_session_id, self._run.run_id, envelope)
         uri = self._payload_uri(span_id)
         # push resource/updated if a notifier is wired
         try:
@@ -404,6 +404,7 @@ class RunTelemetryService:
             agent_end_ts = datetime.fromtimestamp(now_ts, tz=timezone.utc)
             total, llms, diag = await aggregate_agent_usage(
                 self._store,
+                self._run.system_session_id,
                 self._run.run_id,
                 agent_span_id=span_id,
                 agent_id=inferred_agent_id,

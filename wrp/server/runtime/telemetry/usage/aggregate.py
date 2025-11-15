@@ -14,6 +14,7 @@ from .types import AggregationDiagnostics
 
 async def aggregate_agent_usage(
     store: Store,
+    system_session_id: str,
     run_id: str,
     *,
     agent_span_id: str,
@@ -21,7 +22,7 @@ async def aggregate_agent_usage(
     agent_end_ts: Optional[datetime] = None,
 ) -> Tuple[UsageCounters | None, List[LlmUsage] | None, AggregationDiagnostics]:
     """
-    Flat-model aggregation:
+    Flat-model aggregation (system-session aware):
       - Use the Agent span's actual time window [start_ts, end_ts] to select LLM.Ends.
       - Attribute only LLM.End events whose agent_id == this agent_id AND fall within window.
       - Produce diagnostics for missing tags, overlapping windows, etc.
@@ -32,7 +33,7 @@ async def aggregate_agent_usage(
         diag.notes.append("agent_end: missing agent_id; per-agent usage disabled")
         return None, None, diag
 
-    events: List[TelemetryEvent] = await store.load_telemetry(run_id, kinds={"span"})
+    events: List[TelemetryEvent] = await store.load_telemetry(system_session_id, run_id, kinds={"span"})
 
     # 1) Find this agent window (start ts; end ts may be current if end event not yet appended)
     start_ts: Optional[datetime] = None
@@ -95,7 +96,7 @@ async def aggregate_agent_usage(
     llms: List[LlmUsage] = []
 
     for e in llm_end_events:
-        env = await store.get_span_payload(run_id, e.span_id)
+        env = await store.get_span_payload(system_session_id, run_id, e.span_id)
         if not env:
             continue
         part = env.capture.get("end")

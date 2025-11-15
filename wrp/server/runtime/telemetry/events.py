@@ -149,3 +149,29 @@ TelemetryEvent = Union[
     AnnotationSpanPoint,
     GuardrailSpanPoint,
 ]
+
+
+class TelemetrySpanView(BaseModel):
+    """Typed span view used in list/read APIs."""
+
+    span_id: str
+    span_kind: SpanKind
+    name: str
+    ts: datetime | None = None
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    duration_ms: int | None = None
+    status: Literal["ok", "error"] | None = None
+    agent: str | None = None
+    agent_id: str | None = None
+    model: str | None = None
+    tool: str | None = None
+    level: Literal["debug", "info", "warning", "error"] | None = None
+    message_preview: str | None = None
+    guardrail_kind: Literal["input", "output"] | None = None
+    guardrail_status: Literal["ok", "trip", "error"] | None = None
+    guardrail_name: str | None = None
+    tripwire_triggered: bool | None = None
+    from_agent: str | None = None
+    to_agent: str | None = None
+    payload_uri: str | None = None

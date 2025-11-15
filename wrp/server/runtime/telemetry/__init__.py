@@ -1,6 +1,7 @@
 # wrp/server/runtime/telemetry/__init__.py
 from .events import (
     TelemetryEvent,
+    TelemetrySpanView,
     RunSpanStart, RunSpanEnd,
     AgentSpanStart, AgentSpanEnd,
     LlmSpanStart, LlmSpanEnd,
@@ -20,6 +21,7 @@ from .privacy import (
 __all__ = [
     # events
     "TelemetryEvent",
+    "TelemetrySpanView",
     "RunSpanStart", "RunSpanEnd",
     "AgentSpanStart", "AgentSpanEnd",
     "LlmSpanStart", "LlmSpanEnd",

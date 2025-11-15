@@ -196,7 +196,9 @@ def apply_rules(data: Any, rules: RedactRules, *, registry: Dict[str, Pattern[st
 def sanitize_envelope_dict(env: Dict[str, Any], policy: TelemetryResourcePolicy) -> Dict[str, Any]:
     """Return a client-facing sanitized copy of a SpanPayloadEnvelope dict."""
     env = deepcopy(env)
-    cap = env.get("capture", {})
+    # Hardening: clamp capture to a dict so envelope base cannot be misshaped upstream.
+    cap_raw = env.get("capture", {})
+    cap = cap_raw if isinstance(cap_raw, dict) else {}
     new_cap: Dict[str, Any] = {}
     any_redacted = False
     envelope_span_kind = env.get("span_kind")  # e.g. "run" | "agent" | "llm" | "tool"

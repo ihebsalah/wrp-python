@@ -3,29 +3,31 @@ from .seeding import (
     ConversationSeedingNone,
     ConversationSeedingWindow,
     ConversationSeeding,
-    RunFilter,
+    SeedingRunFilter,
     default_conversation_seeding,
     normalize_conversation_seeding,
     WorkflowConversationSeeding,
 )
 from .assembler import select_runs, assemble_seed
-from .service import ConversationsService, Conversation
-from .types import ConversationItem
+from .service import ConversationsService, ChannelHandle
+from .types import ChannelItem, ChannelMeta, ChannelView
 
 __all__ = [
     # seeding
     "ConversationSeedingNone",
     "ConversationSeedingWindow",
     "ConversationSeeding",
-    "RunFilter",
+    "SeedingRunFilter",
     "default_conversation_seeding",
     "normalize_conversation_seeding",
     "WorkflowConversationSeeding",
     # assembler
     "select_runs",
     "assemble_seed",
-    # service
+    # service & types
     "ConversationsService",
-    "Conversation",
-    "ConversationItem",
+    "ChannelHandle",
+    "ChannelItem",
+    "ChannelMeta",
+    "ChannelView",
 ]

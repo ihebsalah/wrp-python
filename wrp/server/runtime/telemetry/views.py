@@ -15,21 +15,23 @@ from .events import (
     RunSpanEnd,
     RunSpanStart,
     TelemetryEvent,
+    TelemetrySpanView,
     ToolSpanEnd,
     ToolSpanStart,
 )
 
 
-def _iso(dt: Optional[datetime]) -> Optional[str]:
-    return dt.isoformat() if isinstance(dt, datetime) else None
-
-
-def build_span_index(events: Iterable[TelemetryEvent]) -> Dict[str, Dict[str, Any]]:
+def build_span_index(
+    events: Iterable[TelemetryEvent],
+    *,
+    mask_model: bool = False,
+    mask_tool: bool = False,
+) -> Dict[str, TelemetrySpanView]:
     """
     Build an in-memory index of spans from span events.
 
     Returns:
-        spans_by_id: span_id -> span dict (json-friendly except datetime values)
+        spans_by_id: span_id -> TelemetrySpanView
     """
     spans: Dict[str, Dict[str, Any]] = {}
 
@@ -130,73 +132,26 @@ def build_span_index(events: Iterable[TelemetryEvent]) -> Dict[str, Dict[str, An
             row["agent"] = getattr(ev, "agent", row.get("agent"))
             row["agent_id"] = getattr(ev, "agent_id", row.get("agent_id"))
 
-    return spans
+    typed: Dict[str, TelemetrySpanView] = {}
+    for sid, data in spans.items():
+        if mask_model:
+            data["model"] = None
+        if mask_tool:
+            data["tool"] = None
+        typed[sid] = TelemetrySpanView(**data)
+    return typed
 
 
-def serialize_span_list(spans: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Return a JSON-friendly list view sorted by start/ts."""
-    rows: List[Dict[str, Any]] = []
-    for s in spans.values():
-        rows.append(
-            {
-                "span_id": s["span_id"],
-                "span_kind": s["span_kind"],
-                "name": s["name"],
-                "ts": _iso(s.get("ts")),
-                "started_at": _iso(s.get("started_at")),
-                "ended_at": _iso(s.get("ended_at")),
-                "duration_ms": s.get("duration_ms"),
-                "status": s.get("status"),
-                # headers
-                "agent": s.get("agent"),
-                "agent_id": s.get("agent_id"),
-                "model": s.get("model"),
-                "tool": s.get("tool"),
-                "level": s.get("level"),
-                "message_preview": s.get("message_preview"),
-                "guardrail_kind": s.get("guardrail_kind"),
-                "guardrail_status": s.get("guardrail_status"),
-                "guardrail_name": s.get("guardrail_name"),
-                "tripwire_triggered": s.get("tripwire_triggered"),
-                "from_agent": s.get("from_agent"),
-                "to_agent": s.get("to_agent"),
-                "payload_uri": s.get("payload_uri"),
-                "children_count": 0,
-            }
-        )
-
-    rows.sort(key=lambda r: (r["started_at"] or r["ts"] or ""))
-    return rows
+def _sort_key(span: TelemetrySpanView) -> str:
+    dt = span.started_at or span.ts
+    return dt.isoformat() if isinstance(dt, datetime) else ""
 
 
-def serialize_span_detail(spans: Dict[str, Dict[str, Any]], span_id: str) -> Optional[Dict[str, Any]]:
-    """Return a JSON-friendly detail view with child ordering."""
-    s = spans.get(span_id)
-    if not s:
-        return None
-    out = {
-        "span_id": s["span_id"],
-        "span_kind": s["span_kind"],
-        "name": s["name"],
-        "ts": _iso(s.get("ts")),
-        "started_at": _iso(s.get("started_at")),
-        "ended_at": _iso(s.get("ended_at")),
-        "duration_ms": s.get("duration_ms"),
-        "status": s.get("status"),
-        # headers
-        "agent": s.get("agent"),
-        "agent_id": s.get("agent_id"),
-        "model": s.get("model"),
-        "tool": s.get("tool"),
-        "level": s.get("level"),
-        "message_preview": s.get("message_preview"),
-        "guardrail_kind": s.get("guardrail_kind"),
-        "guardrail_status": s.get("guardrail_status"),
-        "guardrail_name": s.get("guardrail_name"),
-        "tripwire_triggered": s.get("tripwire_triggered"),
-        "from_agent": s.get("from_agent"),
-        "to_agent": s.get("to_agent"),
-        "payload_uri": s.get("payload_uri"),
-        "children": [],
-    }
-    return out
+def list_span_views(spans: Dict[str, TelemetrySpanView]) -> List[TelemetrySpanView]:
+    """Return span views sorted by start timestamp (or fallback ts)."""
+    return sorted(spans.values(), key=_sort_key)
+
+
+def get_span_view(spans: Dict[str, TelemetrySpanView], span_id: str) -> Optional[TelemetrySpanView]:
+    """Return a single span view by id."""
+    return spans.get(span_id)

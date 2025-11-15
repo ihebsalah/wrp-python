@@ -59,8 +59,8 @@ class TelemetryResourcePolicy(BaseModel):
         v["handoff"] = "redacted"
 
         rules: Dict[str, RedactRules] = {
+            # Keep system_prompt visible by default for OSS, but still mask secrets.
             "agent.start": RedactRules(
-                drop=["system_prompt"],
                 mask=[
                     "tools[*].config.api_key",
                     "tools[*].config.authorization",
@@ -78,10 +78,9 @@ class TelemetryResourcePolicy(BaseModel):
                 mask=["final_output"],
                 hide_usage=True,
             ),
+            # Keep system_prompt visible; still mask sensitive model settings.
             "llm.start": RedactRules(
                 mask=[
-                    "system_prompt",
-                    # mirror agent.start protections for safety
                     "model_settings.api_key",
                     "model_settings.authorization",
                     "model_settings.headers.*",
