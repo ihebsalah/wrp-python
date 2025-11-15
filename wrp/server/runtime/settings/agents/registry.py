@@ -33,10 +33,10 @@ class AgentSettingsRegistry:
         if name in self._defaults:
             logger.warning("Agent settings already registered for '%s'; keeping existing default", name)
             return
-        base = default.copy(deep=True)
+        base = default.model_copy(deep=True)
         base._override_status = False
         self._defaults[name] = base
-        self._settings[name] = base.copy(deep=True)
+        self._settings[name] = base.model_copy(deep=True)
         self._settings_overridden[name] = False
         self._allow_override[name] = allow_override
 
@@ -49,7 +49,7 @@ class AgentSettingsRegistry:
         if cur is not None:
             cur._override_status = bool(self._settings_overridden.get(name, False))
             return cur
-        base = self._defaults[name].copy(deep=True)
+        base = self._defaults[name].model_copy(deep=True)
         base._override_status = False
         self._settings[name] = base
         self._settings_overridden[name] = False

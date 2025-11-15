@@ -99,7 +99,7 @@ class WorkflowManager:
         self._workflows[wf.name] = wf
         # initialize current settings (copy default)
         if wf.settings_default is not None:
-            inst = wf.settings_default.copy(deep=True)
+            inst = wf.settings_default.model_copy(deep=True)
             # propagate initial flag to instance
             inst._override_status = False
             self._settings[wf.name] = inst
@@ -128,7 +128,7 @@ class WorkflowManager:
             cur._override_status = bool(self._settings_overridden.get(name, False))
             return cur
         # fall back to default if somehow absent
-        cur = wf.settings_default.copy(deep=True)
+        cur = wf.settings_default.model_copy(deep=True)
         cur._override_status = False
         self._settings[name] = cur
         self._settings_overridden[name] = False

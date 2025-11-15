@@ -35,10 +35,10 @@ class ProviderSettingsRegistry:
         if name in self._defaults:
             logger.warning("Provider settings already registered for '%s'; keeping existing default", name)
             return
-        base = default.copy(deep=True)
+        base = default.model_copy(deep=True)
         base._override_status = False
         self._defaults[name] = base
-        self._settings[name] = base.copy(deep=True)
+        self._settings[name] = base.model_copy(deep=True)
         self._settings_overridden[name] = False
         self._allow_override[name] = allow_override
 
@@ -52,7 +52,7 @@ class ProviderSettingsRegistry:
             cur._override_status = bool(self._settings_overridden.get(name, False))
             return cur
         # fall back to default if somehow absent
-        base = self._defaults[name].copy(deep=True)
+        base = self._defaults[name].model_copy(deep=True)
         base._override_status = False
         self._settings[name] = base
         self._settings_overridden[name] = False

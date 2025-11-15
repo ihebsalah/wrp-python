@@ -1,10 +1,11 @@
 # examples/ai_engineer_server.py
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 # --- Pydantic ---
-from pydantic import BaseModel, Field
+from pydantic import AnyHttpUrl, BaseModel, Field, SecretStr
 
 # --- OpenAI Agent SDK ---
 from agents import (
@@ -14,20 +15,26 @@ from agents import (
 )
 
 # --- WRP imports ---
-from wrp.server.runtime.server import WRP, Context
-from wrp.server.runtime.telemetry.privacy.presets import open_default
-from wrp.server.runtime.store.stores.sqlite_store import SqliteStore
-from wrp.server.runtime.conversations.seeding import WorkflowConversationSeeding, ConversationSeedingWindow
+from wrp.server.runtime.settings.agents.settings import AgentSettings
 from wrp.server.runtime.conversations.privacy import ConversationResourcePolicy
-from wrp.server.runtime.workflows.settings import WorkflowSettings
+from wrp.server.runtime.conversations.seeding import (
+    ConversationSeedingWindow,
+    WorkflowConversationSeeding,
+)
+from wrp.server.runtime.settings.providers.settings import ProviderSettings
+from wrp.server.runtime.server import WRP, Context
+from wrp.server.runtime.store.stores.sqlite_store import SqliteStore
+from wrp.server.runtime.telemetry.integrations.openai.openai_hooks import (
+    OpenAITelemetryHooks,
+)
+from wrp.server.runtime.telemetry.privacy.presets import open_default
+from wrp.server.runtime.settings.workflows import WorkflowSettings
 from wrp.server.runtime.workflows.types import WorkflowInput, WorkflowOutput
-from wrp.server.runtime.telemetry.integrations.openai.openai_hooks import OpenAITelemetryHooks
 
 
 # ---------------------------
 # Agent output schemas (typed)
 # ---------------------------
-
 class DevAgentSchema(BaseModel):
     developer_report: str
 
@@ -39,27 +46,105 @@ class TestAgentSchema(BaseModel):
 # ---------------------------
 # Workflow-level settings (defaults)
 # ---------------------------
-class DevSettings(WorkflowSettings):
+class DevWorkflowSettings(WorkflowSettings):
+    """
+    Workflow-level knobs for the dev workflow.
+
+    Intentionally kept free of model settings; those live in AgentSettings now.
+    """
+
+    pass
+
+
+class TestWorkflowSettings(WorkflowSettings):
+    """
+    Workflow-level knobs for the test workflow.
+
+    Demonstrates behavior-level control that sits above the raw workflow input.
+    """
+
+    allow_code_repair: bool = True
+
+
+# ---------------------------
+# Provider / Agent settings
+# ---------------------------
+
+
+class OpenAIProviderSettings(ProviderSettings):
+    api_key: SecretStr | None = Field(
+        default=None,
+        description="OpenAI API key used by agents that reference the 'openai' provider",
+    )
+    base_url: AnyHttpUrl = Field(
+        "https://api.openai.com/v1", description="Base URL for OpenAI API requests"
+    )
+    organization: Optional[str] = Field(
+        default=None, description="Optional OpenAI organization identifier"
+    )
+
+    # Prevent clients from switching the underlying provider host
+    locked = {"base_url"}
+
+
+class DevAgentSettings(AgentSettings):
+    provider_name: str = Field(
+        "openai", description="Provider key used to look up OpenAIProviderSettings"
+    )
     model: str = "gpt-4.1-mini"
     temperature: float = 0.3
     top_p: float = 1.0
     max_tokens: int = 2048
     parallel_tool_calls: bool = True
     store: bool = True
-    # Demonstrate fine-grained lock: cannot change the model via overrides
-    locked = {"model"}
+    # simple “allowed list” that explicitly includes the provider
+    allowed_providers: list[str] = ["openai"]
 
 
-class TestSettings(WorkflowSettings):
+class TestAgentSettings(AgentSettings):
+    provider_name: str = Field(
+        "openai", description="Provider key used to look up OpenAIProviderSettings"
+    )
     model: str = "gpt-4.1-mini"
     temperature: float = 0.3
     top_p: float = 1.0
     max_tokens: int = 1600
     parallel_tool_calls: bool = True
     store: bool = True
+    allowed_providers: list[str] = ["openai"]
 
 
-def build_dev_agent(cfg: DevSettings) -> Agent:
+def _ensure_provider_allowed(agent_cfg: AgentSettings) -> None:
+    allowed = getattr(agent_cfg, "allowed_providers", None)
+    if allowed and agent_cfg.provider_name not in allowed:
+        raise RuntimeError(
+            f"Provider '{agent_cfg.provider_name}' is not allowed for this agent "
+            f"(allowed_providers={allowed})"
+        )
+
+
+def _apply_openai_provider_env(provider_cfg: OpenAIProviderSettings) -> None:
+    """
+    Apply provider settings to the OpenAI SDK via environment variables.
+
+    This keeps the example simple and ensures provider secrets actually affect
+    outbound calls.
+    """
+    if provider_cfg.api_key is not None:
+        os.environ["OPENAI_API_KEY"] = provider_cfg.api_key.get_secret_value()
+    if provider_cfg.base_url:
+        os.environ["OPENAI_BASE_URL"] = str(provider_cfg.base_url)
+    if provider_cfg.organization is not None:
+        os.environ["OPENAI_ORG_ID"] = provider_cfg.organization
+
+
+def build_dev_agent(
+    agent_cfg: DevAgentSettings,
+    provider_cfg: OpenAIProviderSettings,
+) -> Agent:
+    _ensure_provider_allowed(agent_cfg)
+    _apply_openai_provider_env(provider_cfg)
+
     return Agent(
         name="Dev Agent",
         instructions=(
@@ -68,19 +153,25 @@ def build_dev_agent(cfg: DevSettings) -> Agent:
             "When asked to repair code based on testing feedback, modify the files accordingly "
             "and return a REPORT describing exactly what you changed (no code blocks)."
         ),
-        model=cfg.model,
+        model=agent_cfg.model,
         output_type=DevAgentSchema,
         model_settings=ModelSettings(
-            temperature=cfg.temperature,
-            top_p=cfg.top_p,
-            max_tokens=cfg.max_tokens,
-            parallel_tool_calls=cfg.parallel_tool_calls,
-            store=cfg.store,
+            temperature=agent_cfg.temperature,
+            top_p=agent_cfg.top_p,
+            max_tokens=agent_cfg.max_tokens,
+            parallel_tool_calls=agent_cfg.parallel_tool_calls,
+            store=agent_cfg.store,
         ),
     )
 
 
-def build_test_agent(cfg: TestSettings) -> Agent:
+def build_test_agent(
+    agent_cfg: TestAgentSettings,
+    provider_cfg: OpenAIProviderSettings,
+) -> Agent:
+    _ensure_provider_allowed(agent_cfg)
+    _apply_openai_provider_env(provider_cfg)
+
     return Agent(
         name="Test Agent",
         instructions=(
@@ -89,14 +180,14 @@ def build_test_agent(cfg: TestSettings) -> Agent:
             "If helpful, you may outline pytest snippets in prose, but your structured output "
             "must be a report."
         ),
-        model=cfg.model,
+        model=agent_cfg.model,
         output_type=TestAgentSchema,
         model_settings=ModelSettings(
-            temperature=cfg.temperature,
-            top_p=cfg.top_p,
-            max_tokens=cfg.max_tokens,
-            parallel_tool_calls=cfg.parallel_tool_calls,
-            store=cfg.store,
+            temperature=agent_cfg.temperature,
+            top_p=agent_cfg.top_p,
+            max_tokens=agent_cfg.max_tokens,
+            parallel_tool_calls=agent_cfg.parallel_tool_calls,
+            store=agent_cfg.store,
         ),
     )
 
@@ -104,6 +195,7 @@ def build_test_agent(cfg: TestSettings) -> Agent:
 # ---------------------------
 # Workflow I/O models
 # ---------------------------
+
 
 class DevIn(WorkflowInput):
     prompt: str = Field(..., description="Development prompt / ticket text")
@@ -115,8 +207,13 @@ class DevOut(WorkflowOutput):
 
 class TestIn(WorkflowInput):
     prompt: str = Field(..., description="Testing prompt")
-    test_input: str = Field(..., description="Subject under test (code path, snippet, API contract, etc.)")
-    repair_code: bool = Field(default=False, description="If true, reuse Dev Agent to apply a fix and return a repair report")
+    test_input: str = Field(
+        ..., description="Subject under test (code path, snippet, API contract, etc.)"
+    )
+    repair_code: bool = Field(
+        default=False,
+        description="If true, reuse Dev Agent to apply a fix and return a repair report",
+    )
 
 
 class TestOut(WorkflowOutput):
@@ -131,12 +228,15 @@ class TestOut(WorkflowOutput):
 # Privacy/serving policy for conversations (sanitization + visibility)
 conv_policy = ConversationResourcePolicy.defaults()
 # Example overrides (tweak as you like):
-conv_policy.visibility_by_channel.update({"debug": "private"})   # drop debug from served resources
-conv_policy.visibility_by_role.update({"system": "redacted"})    # serve system messages in redacted form
+conv_policy.visibility_by_channel.update(
+    {"debug": "private"}
+)  # drop debug from served resources
+conv_policy.visibility_by_role.update(
+    {"system": "redacted"}
+)  # serve system messages in redacted form
 
 DEFAULT_SEEDING = WorkflowConversationSeeding(
     default_seeding=ConversationSeedingWindow(messages=20),
-    default_channels=["default"],
     allowed_channels=None,
 )
 
@@ -150,9 +250,15 @@ server = WRP(
     global_input_limit_bytes=2 * 1024 * 1024,  # 2 MiB cap for all workflows
 )
 
+# Register provider + agent settings so clients can inspect/override them
+server.register_provider_settings("openai", OpenAIProviderSettings())
+server.register_agent_settings("dev-agent", DevAgentSettings(), allow_override=True)
+server.register_agent_settings("test-agent", TestAgentSettings(), allow_override=True)
+
 # ---------------------------
 # Workflows
 # ---------------------------
+
 
 @server.workflow(
     name="dev",
@@ -162,35 +268,51 @@ server = WRP(
     output_model=DevOut,
     seeding=DEFAULT_SEEDING,
     input_limit_bytes=1 * 1024 * 1024,  # 1 MiB cap (dev)
-    settings_default=DevSettings(),      # enable workflow settings with defaults
-    settings_allow_override=True,        # allow overrides, but 'model' is locked via DevSettings.locked
+    settings_default=DevWorkflowSettings(),  # enable workflow settings with defaults
+    settings_allow_override=True,  # allow overrides
 )
 async def dev_flow(wf_input: DevIn, ctx: Context) -> DevOut:
-    # Use only the 'dev' channel conversation (seed + live).
-    conv = await ctx.run.conversations.get(channels=["dev"])
+    # Use only the 'dev' channel (seed + live).
+    ch = await ctx.run.conversations.get_channel(
+        "dev", "Development", "Primary channel for development work"
+    )
     # Effective workflow settings (no name needed; inferred from current workflow)
-    dev_cfg = ctx.get_workflow_settings()  # -> DevSettings instance
+    dev_cfg = ctx.get_workflow_settings()  # -> DevWorkflowSettings instance
+    dev_agent_cfg = ctx.get_agent_settings("dev-agent")
+    if dev_agent_cfg is None:
+        raise RuntimeError("Missing agent settings for 'dev-agent'")
+    dev_provider_cfg = ctx.get_provider_settings(dev_agent_cfg.provider_name)
+    if dev_provider_cfg is None:
+        raise RuntimeError(
+            f"Missing provider settings for '{dev_agent_cfg.provider_name}'"
+        )
+
     # Example: warn if any override has been applied (instance helper infers workflow via ctx)
     if dev_cfg.settings_overridden(ctx=ctx):
         await ctx.run.telemetry.annotation(
-            message=f"dev: non-default settings in effect (model={dev_cfg.model})",
+            message="dev: non-default workflow settings in effect",
             level="warning",
         )
-    dev_agent = build_dev_agent(dev_cfg)
+    dev_agent = build_dev_agent(dev_agent_cfg, dev_provider_cfg)
 
     user_msg = {
         "role": "user",
         "content": [{"type": "input_text", "text": wf_input.prompt}],
     }
-    await conv.add_item(user_msg, channel="dev")
+    await ch.add_item(user_msg)
 
-    await ctx.run.telemetry.annotation(message="dev: starting", level="info")
+    await ctx.run.telemetry.annotation(
+        message=f"dev: starting (model={dev_agent_cfg.model}, provider={dev_agent_cfg.provider_name})",
+        level="info",
+    )
 
-    dev_result_temp = await Runner.run(dev_agent, input=conv.get_items(), hooks=OpenAITelemetryHooks(ctx))
+    dev_result_temp = await Runner.run(
+        dev_agent, input=ch.get_items(), hooks=OpenAITelemetryHooks(ctx)
+    )
 
     # Persist + mirror assistant messages to the same handle
     for item in dev_result_temp.new_items:
-        await conv.add_item(item.to_input_item(), channel="dev")
+        await ch.add_item(item.to_input_item())
 
     # ---- typed result ----
     dev_result = {
@@ -211,22 +333,35 @@ async def dev_flow(wf_input: DevIn, ctx: Context) -> DevOut:
     output_model=TestOut,
     seeding=DEFAULT_SEEDING,
     input_limit_bytes=1 * 1024 * 1024,  # 1 MiB cap (test)
-    settings_default=TestSettings(),     # enable workflow settings with defaults
-    settings_allow_override=False,       # demonstrate all-or-nothing: no overrides permitted
+    settings_default=TestWorkflowSettings(),  # enable workflow settings with defaults
+    settings_allow_override=False,  # demonstrate all-or-nothing: no overrides permitted
 )
 async def test_flow(wf_input: TestIn, ctx: Context) -> TestOut:
-    # Primary conversation for Test Agent uses only 'test' channel (seed + live).
-    test_conv = await ctx.run.conversations.get(channels=["test"])
-    test_cfg = ctx.get_workflow_settings()
+    # Primary channel for Test Agent uses only 'test' (seed + live).
+    test_ch = await ctx.run.conversations.get_channel(
+        "test", "Testing", "Primary channel for test design & results"
+    )
+    test_cfg = ctx.get_workflow_settings()  # -> TestWorkflowSettings instance
+    test_agent_cfg = ctx.get_agent_settings("test-agent")
+    if test_agent_cfg is None:
+        raise RuntimeError("Missing agent settings for 'test-agent'")
+    test_provider_cfg = ctx.get_provider_settings(test_agent_cfg.provider_name)
+    if test_provider_cfg is None:
+        raise RuntimeError(
+            f"Missing provider settings for '{test_agent_cfg.provider_name}'"
+        )
 
     # Alternative override detection via manager flag (canonical, cheap):
     if ctx.wrp._workflow_manager.settings_overridden(ctx.run.workflow_name):
         await ctx.run.telemetry.annotation(
-            message=f"test: non-default settings in effect (model={test_cfg.model})",
+            message=(
+                "test: non-default workflow settings in effect "
+                f"(allow_code_repair={test_cfg.allow_code_repair})"
+            ),
             level="warning",
         )
 
-    test_agent = build_test_agent(test_cfg)
+    test_agent = build_test_agent(test_agent_cfg, test_provider_cfg)
 
     user_test_msg = {
         "role": "user",
@@ -235,18 +370,20 @@ async def test_flow(wf_input: TestIn, ctx: Context) -> TestOut:
             {"type": "input_text", "text": f"TEST INPUT:\n{wf_input.test_input}"},
         ],
     }
-    await test_conv.add_item(user_test_msg, channel="test")
+    await test_ch.add_item(user_test_msg)
 
     await ctx.run.telemetry.annotation(
-        message="test: starting",
+        message=f"test: starting (model={test_agent_cfg.model}, provider={test_agent_cfg.provider_name})",
         level="info",
         data={"repair_code": wf_input.repair_code},
     )
 
-    test_result_temp = await Runner.run(test_agent, input=test_conv.get_items(), hooks=OpenAITelemetryHooks(ctx))
+    test_result_temp = await Runner.run(
+        test_agent, input=test_ch.get_items(), hooks=OpenAITelemetryHooks(ctx)
+    )
 
     for item in test_result_temp.new_items:
-        await test_conv.add_item(item.to_input_item(), channel="test")
+        await test_ch.add_item(item.to_input_item())
 
     # ---- typed result ----
     test_result = {
@@ -257,12 +394,31 @@ async def test_flow(wf_input: TestIn, ctx: Context) -> TestOut:
 
     repair_report: Optional[str] = None
 
-    if wf_input.repair_code:
+    # Workflow-level control over whether repair is permitted at all.
+    repair_requested = wf_input.repair_code
+    repair_enabled = bool(test_cfg.allow_code_repair)
+
+    if repair_requested and not repair_enabled:
+        await ctx.run.telemetry.annotation(
+            message="test: repair requested via input but disabled by workflow settings",
+            level="warning",
+            data={"repair_code": True, "allow_code_repair": False},
+        )
+
+    if repair_requested and repair_enabled:
         # Reuse dev agent with 'dev' channel (seed + live).
-        dev_conv = await ctx.run.conversations.get(channels=["dev"])
-        # Pull another workflow’s settings by name when needed
-        dev_cfg = ctx.get_workflow_settings("dev")
-        dev_agent = build_dev_agent(dev_cfg)
+        dev_ch = await ctx.run.conversations.get_channel(
+            "dev", "Development", "Primary channel for development work"
+        )
+        dev_agent_cfg = ctx.get_agent_settings("dev-agent")
+        if dev_agent_cfg is None:
+            raise RuntimeError("Missing agent settings for 'dev-agent'")
+        dev_provider_cfg = ctx.get_provider_settings(dev_agent_cfg.provider_name)
+        if dev_provider_cfg is None:
+            raise RuntimeError(
+                f"Missing provider settings for '{dev_agent_cfg.provider_name}'"
+            )
+        dev_agent = build_dev_agent(dev_agent_cfg, dev_provider_cfg)
 
         repair_prompt = (
             "Apply a minimal, safe fix based on the following testing feedback. "
@@ -275,14 +431,22 @@ async def test_flow(wf_input: TestIn, ctx: Context) -> TestOut:
             "role": "user",
             "content": [{"type": "input_text", "text": repair_prompt}],
         }
-        await dev_conv.add_item(repair_user_msg, channel="dev")
+        await dev_ch.add_item(repair_user_msg)
 
-        await ctx.run.telemetry.annotation(message="test: repairing with dev agent", level="info")
+        await ctx.run.telemetry.annotation(
+            message=(
+                "test: repairing with dev agent "
+                f"(model={dev_agent_cfg.model}, provider={dev_agent_cfg.provider_name})"
+            ),
+            level="info",
+        )
 
-        repair_result_temp = await Runner.run(dev_agent, input=dev_conv.get_items(), hooks=OpenAITelemetryHooks(ctx))
+        repair_result_temp = await Runner.run(
+            dev_agent, input=dev_ch.get_items(), hooks=OpenAITelemetryHooks(ctx)
+        )
 
         for item in repair_result_temp.new_items:
-            await dev_conv.add_item(item.to_input_item(), channel="dev")
+            await dev_ch.add_item(item.to_input_item())
 
         # ---- typed result (dev agent again) ----
         repair_result = {

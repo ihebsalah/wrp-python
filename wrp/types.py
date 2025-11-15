@@ -274,7 +274,7 @@ class WorkflowSettingsCapability(BaseModel):
 
     read: bool | None = None  # resource://workflows/{wf}/settings
     update: bool | None = None  # HTTP PUT /workflows/{wf}/settings
-    schema: bool | None = None  # resource://workflows/{wf}/settings/schema
+    jsonSchema: bool | None = None  # resource://workflows/{wf}/settings/schema
     model_config = ConfigDict(extra="allow")
 
 
@@ -292,7 +292,7 @@ class ProviderSettingsCapability(BaseModel):
 
     read: bool | None = None  # providers/settings/read
     update: bool | None = None  # providers/settings/update
-    schema: bool | None = None  # providers/settings/schema
+    jsonSchema: bool | None = None  # providers/settings/schema
     model_config = ConfigDict(extra="allow")
 
 
@@ -308,7 +308,7 @@ class AgentSettingsCapability(BaseModel):
 
     read: bool | None = None  # agents/settings/read
     update: bool | None = None  # agents/settings/update
-    schema: bool | None = None  # agents/settings/schema
+    jsonSchema: bool | None = None  # agents/settings/schema
     model_config = ConfigDict(extra="allow")
 
 
@@ -819,7 +819,7 @@ class WorkflowSettingsReadResult(Result):
 class WorkflowSettingsSchemaResult(Result):
     """Result for workflows/settings/schema."""
 
-    schema: dict[str, Any] | None = None
+    jsonSchema: dict[str, Any] | None = None
 
 
 #
@@ -896,7 +896,7 @@ class ProviderSettingsReadResult(Result):
 class ProviderSettingsSchemaResult(Result):
     """Result for providers/settings/schema."""
 
-    schema: dict[str, Any] | None = None
+    jsonSchema: dict[str, Any] | None = None
 
 
 #
@@ -965,7 +965,7 @@ class AgentSettingsReadResult(Result):
 class AgentSettingsSchemaResult(Result):
     """Result for agents/settings/schema."""
 
-    schema: dict[str, Any] | None = None
+    jsonSchema: dict[str, Any] | None = None
 
 
 LoggingLevel = Literal["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"]
@@ -1248,7 +1248,7 @@ class RunsOutputReadRequest(Request[RunsIOReadRequestParams, Literal["runs/outpu
 class RunsIOReadResult(Result):
     data: Any | None = None
     workflow: str | None = None
-    schema: dict[str, Any] | None = None
+    jsonSchema: dict[str, Any] | None = None
     system_session_id: str | None = None
     run_id: str | None = None
 

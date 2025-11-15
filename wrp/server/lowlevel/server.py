@@ -196,7 +196,7 @@ class Server(Generic[LifespanResultT, RequestT]):
                 wf_settings = types.WorkflowSettingsCapability(
                     read=True if has_read else None,
                     update=True if has_update else None,
-                    schema=True if has_schema else None,
+                    jsonSchema=True if has_schema else None,
                 )
             workflows_capability = types.WorkflowsCapability(
                 listChanged=notification_options.workflows_changed,
@@ -214,7 +214,7 @@ class Server(Generic[LifespanResultT, RequestT]):
                 settings=types.ProviderSettingsCapability(
                     read=True if types.ProviderSettingsReadRequest in self.request_handlers else None,
                     update=True if types.ProviderSettingsUpdateRequest in self.request_handlers else None,
-                    schema=True if types.ProviderSettingsSchemaRequest in self.request_handlers else None,
+                    jsonSchema=True if types.ProviderSettingsSchemaRequest in self.request_handlers else None,
                 )
             )
 
@@ -229,7 +229,7 @@ class Server(Generic[LifespanResultT, RequestT]):
                 settings=types.AgentSettingsCapability(
                     read=True if types.AgentSettingsReadRequest in self.request_handlers else None,
                     update=True if types.AgentSettingsUpdateRequest in self.request_handlers else None,
-                    schema=True if types.AgentSettingsSchemaRequest in self.request_handlers else None,
+                    jsonSchema=True if types.AgentSettingsSchemaRequest in self.request_handlers else None,
                 )
             )
 

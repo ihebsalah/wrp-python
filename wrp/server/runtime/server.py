@@ -986,7 +986,7 @@ class WRP(Generic[LifespanResultT]):
         Return a deep copy of the effective ProviderSettings for the given provider.
         """
         cfg = self._provider_settings_registry.get(name)
-        return cfg.copy(deep=True) if cfg is not None else None
+        return cfg.model_copy(deep=True) if cfg is not None else None
 
     def register_agent_settings(
         self,
@@ -1008,7 +1008,7 @@ class WRP(Generic[LifespanResultT]):
         Return a deep copy of the effective AgentSettings for the given agent.
         """
         cfg = self._agent_settings_registry.get(name)
-        return cfg.copy(deep=True) if cfg is not None else None
+        return cfg.model_copy(deep=True) if cfg is not None else None
 
     def custom_route(
         self,
@@ -1393,9 +1393,9 @@ class WRP(Generic[LifespanResultT]):
         """Return JSON schema for a workflow's settings (if defined)."""
         wf = self._workflow_manager.get(workflow)
         if not wf or wf.settings_default is None:
-            return types.WorkflowSettingsSchemaResult(schema=None)
+            return types.WorkflowSettingsSchemaResult(jsonSchema=None)
         return types.WorkflowSettingsSchemaResult(
-            schema=wf.settings_default.__class__.model_json_schema(by_alias=True)
+            jsonSchema=wf.settings_default.__class__.model_json_schema(by_alias=True)
         )
 
     async def _wf_settings_update(self, workflow: str, values: dict[str, Any]) -> types.WorkflowSettingsReadResult:
@@ -1439,7 +1439,7 @@ class WRP(Generic[LifespanResultT]):
     async def _provider_settings_schema(self, provider: str) -> types.ProviderSettingsSchemaResult:
         """Return JSON schema for a provider's settings (if defined)."""
         schema = self._provider_settings_registry.schema_for(provider)
-        return types.ProviderSettingsSchemaResult(schema=schema)
+        return types.ProviderSettingsSchemaResult(jsonSchema=schema)
 
     async def _provider_settings_update(
         self,
@@ -1484,7 +1484,7 @@ class WRP(Generic[LifespanResultT]):
     async def _agent_settings_schema(self, agent: str) -> types.AgentSettingsSchemaResult:
         """Return JSON schema for an agent's settings (if defined)."""
         schema = self._agent_settings_registry.schema_for(agent)
-        return types.AgentSettingsSchemaResult(schema=schema)
+        return types.AgentSettingsSchemaResult(jsonSchema=schema)
 
     async def _agent_settings_update(
         self,
@@ -1727,7 +1727,7 @@ class Context(BaseModel, Generic[ServerSessionT, LifespanContextT, RequestT]):
             raise ValueError("No workflow is active, and no workflow name was provided")
         cfg = self.wrp._workflow_manager.get_settings(wf_name)
         # Hand workflows a deep copy so in-process mutations don't persist.
-        return cfg.copy(deep=True) if cfg is not None else None
+        return cfg.model_copy(deep=True) if cfg is not None else None
 
     def get_provider_settings(self, name: str) -> ProviderSettings | None:
         """

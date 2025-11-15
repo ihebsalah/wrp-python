@@ -1,5 +1,9 @@
 # wrp/shared/exceptions.py
-from wrp.types import ErrorData
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from wrp.types import ErrorData
 
 
 class WrpError(Exception):

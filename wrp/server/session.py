@@ -54,7 +54,7 @@ class InitializationState(Enum):
 ServerSessionT = TypeVar("ServerSessionT", bound="ServerSession")
 
 ServerRequestResponder = (
-    RequestResponder[types.WRPClientRequest, types.WRPServerResult] | types.WRPClientNotification | Exception
+    RequestResponder[types.ClientRequest, types.ServerResult] | types.ClientNotification | Exception
 )
 
 

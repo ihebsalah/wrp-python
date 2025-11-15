@@ -6,6 +6,7 @@ from mcp.server.stdio import stdio_server
 from wrp.server.session import ServerSession
 from wrp.client.session import ClientSession
 from wrp.shared.exceptions import WrpError
+from wrp.server.runtime.workflows.types import WorkflowInput, WorkflowOutput, WorkflowDescriptor
 from .types import (
     ClientCapabilities,
     ClientNotification,
@@ -36,8 +37,6 @@ from .types import (
     ResourcesCapability,
     ResourceUpdatedNotification,
     WorkflowDescriptor,
-    WorkflowInput,
-    WorkflowOutput,
     WorkflowsCapability,
     WorkflowsListChangedNotification,
     RootsCapability,

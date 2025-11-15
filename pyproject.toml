@@ -20,9 +20,26 @@ classifiers = [
   "Development Status :: 3 - Alpha",
 ]
 
+dependencies = [
+  "mcp==1.21.1",
+  "httpx>=0.28.1",
+  "anyio>=4.11.0",
+  "uvicorn>=0.38.0",
+  "starlette>=0.50.0",
+  "pydantic>=2.12.4",
+  "cryptography>=46.0.3",
+  "jsonschema>=4.25.1",
+  "psycopg>=3.2.12",
+  "openai-agents>=0.5.1",
+]
+
 [tool.setuptools.packages.find]
 include = ["wrp", "wrp.*"]
 
 [tool.setuptools]
 include-package-data = true
 license-files = ["LICENSE", "NOTICE", "TRADEMARKS.md", "authors"]
+
+[project.optional-dependencies]
+dev = [
+]
