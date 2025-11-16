@@ -13,7 +13,7 @@ __all__ = [
     "vis",
     # serving helpers
     "sanitize_envelope_dict",
-    "is_private_only_span_payload_uri",
+    "is_private_only_span_payload",
     # presets module (namespace)
     "presets",
 ]
