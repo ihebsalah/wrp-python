@@ -25,25 +25,23 @@ from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend, RequireAut
 from mcp.server.auth.provider import OAuthAuthorizationServerProvider, ProviderTokenVerifier, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp.exceptions import ResourceError
-from mcp.server.fastmcp.resources import FunctionResource, Resource, ResourceManager
 from mcp.server.fastmcp.utilities.context_injection import find_context_parameter
 from mcp.server.fastmcp.utilities.logging import configure_logging, get_logger
 from mcp.server.lowlevel.helper_types import ReadResourceContents
-from mcp.server.sse import SseServerTransport
-from mcp.server.stdio import stdio_server
 from mcp.server.streamable_http import EventStore
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import AnyFunction, Icon
-from mcp.types import Resource as MCPResource
-from mcp.types import ResourceTemplate as MCPResourceTemplate
+from mcp.types import AnyFunction
 from mcp.types import DEFAULT_NEGOTIATED_VERSION as MCP_DEFAULT_PROTOCOL
 
+from wrp.server.sse import SseServerTransport
+from wrp.server.stdio import stdio_server
 from wrp.server.elicitation import ElicitationResult, ElicitSchemaModelT, elicit_with_validation
 from wrp.server.lowlevel.server import LifespanResultT
 from wrp.server.lowlevel.server import Server as WRPServer
 from wrp.server.lowlevel.server import lifespan as default_lifespan
 from wrp.server.middleware.header_compat import HeaderCompatMiddleware
+from wrp.server.runtime.resources import FunctionResource, Resource, ResourceManager
 from wrp.server.runtime.settings.agents import AgentSettingsRegistry
 from wrp.server.runtime.settings.agents import AgentSettings
 from wrp.server.runtime.conversations.privacy.guards import (
@@ -152,7 +150,7 @@ class WRP(Generic[LifespanResultT]):
         name: str | None = None,
         instructions: str | None = None,
         website_url: str | None = None,
-        icons: list[Icon] | None = None,
+        icons: list[types.Icon] | None = None,
         auth_server_provider: OAuthAuthorizationServerProvider[Any, Any, Any] | None = None,
         token_verifier: TokenVerifier | None = None,
         event_store: EventStore | None = None,
@@ -181,7 +179,7 @@ class WRP(Generic[LifespanResultT]):
         global_input_limit_bytes: int | None = None,
     ):
         # Build Settings while *only* overriding the default if a value was provided.
-        _settings_kwargs = dict(
+        _settings_kwargs = dict[str, Any](
             debug=debug,
             log_level=log_level,
             host=host,
@@ -275,7 +273,7 @@ class WRP(Generic[LifespanResultT]):
         return self._wrp_server.website_url
 
     @property
-    def icons(self) -> list[Icon] | None:
+    def icons(self) -> list[types.Icon] | None:
         return self._wrp_server.icons
 
     @property
@@ -374,20 +372,6 @@ class WRP(Generic[LifespanResultT]):
                 bucket.remove(sess)  # no-op if not present
             except KeyError:
                 pass
-
-    async def notify_resource_updated(self, uri: str | AnyUrl) -> None:
-        """Push resource/updated to all subscribers of this uri."""
-        key = str(uri)
-        subs = list(self._resource_subscriptions.get(key, ()))  # copy to avoid mutation during iteration
-        for sess in subs:
-            try:
-                await sess.send_resource_updated(key)
-            except Exception:
-                # stale/closed session; best-effort cleanup
-                try:
-                    self._resource_subscriptions[key].discard(sess)
-                except Exception:
-                    pass
 
     # -------------------------
     # System Events: runtime impl
@@ -545,7 +529,7 @@ class WRP(Generic[LifespanResultT]):
             return types.RunsIOReadResult(
                 data=None,
                 workflow=workflow,
-                schema=schema,
+                jsonSchema=schema,
                 system_session_id=system_session_id,
                 run_id=run_id,
             )
@@ -554,7 +538,7 @@ class WRP(Generic[LifespanResultT]):
             return types.RunsIOReadResult(
                 data=None,
                 workflow=workflow,
-                schema=schema,
+                jsonSchema=schema,
                 system_session_id=system_session_id,
                 run_id=run_id,
             )
@@ -564,7 +548,7 @@ class WRP(Generic[LifespanResultT]):
         return types.RunsIOReadResult(
             data=part.get("data") if part else None,
             workflow=workflow,
-            schema=schema,
+            jsonSchema=schema,
             system_session_id=system_session_id,
             run_id=run_id,
         )
@@ -581,7 +565,7 @@ class WRP(Generic[LifespanResultT]):
             return types.RunsIOReadResult(
                 data=None,
                 workflow=workflow,
-                schema=schema,
+                jsonSchema=schema,
                 system_session_id=system_session_id,
                 run_id=run_id,
             )
@@ -590,7 +574,7 @@ class WRP(Generic[LifespanResultT]):
             return types.RunsIOReadResult(
                 data=None,
                 workflow=workflow,
-                schema=schema,
+                jsonSchema=schema,
                 system_session_id=system_session_id,
                 run_id=run_id,
             )
@@ -600,7 +584,7 @@ class WRP(Generic[LifespanResultT]):
         return types.RunsIOReadResult(
             data=part.get("data") if part else None,
             workflow=workflow,
-            schema=schema,
+            jsonSchema=schema,
             system_session_id=system_session_id,
             run_id=run_id,
         )
@@ -701,7 +685,7 @@ class WRP(Generic[LifespanResultT]):
     def set_default_seeding(self, seeding: WorkflowConversationSeeding | None) -> None:
         self._default_seeding = seeding
 
-    async def _list_workflows(self) -> types.ListWorkflowsResult:
+    async def _list_workflows(self, _req: types.ListWorkflowsRequest,) -> types.ListWorkflowsResult:
         """Return public descriptors for all registered workflows (no pagination)."""
         return types.ListWorkflowsResult(workflows=self._workflow_manager.list_descriptors())
 
@@ -717,12 +701,12 @@ class WRP(Generic[LifespanResultT]):
         await self._workflow_manager.load_persisted_settings_if_needed(name)
         return await self._workflow_manager.run(name, wf_input, context)
 
-    async def _list_resources(self) -> list[MCPResource]:
+    async def _list_resources(self) -> list[types.Resource]:
         """List all available resources."""
 
         resources = self._resource_manager.list_resources()
         return [
-            MCPResource(
+            types.Resource(
                 uri=resource.uri,
                 name=resource.name or "",
                 title=resource.title,
@@ -733,10 +717,10 @@ class WRP(Generic[LifespanResultT]):
             for resource in resources
         ]
 
-    async def _list_resource_templates(self) -> list[MCPResourceTemplate]:
+    async def _list_resource_templates(self) -> list[types.ResourceTemplate]:
         templates = self._resource_manager.list_templates()
         return [
-            MCPResourceTemplate(
+            types.ResourceTemplate(
                 uriTemplate=template.uri_template,
                 name=template.name,
                 title=template.title,
@@ -771,7 +755,7 @@ class WRP(Generic[LifespanResultT]):
         description: str | None = None,
         input_model: type[WorkflowInput] | None = None,
         output_model: type[WorkflowOutput] | None = None,
-        icons: list[Icon] | None = None,
+        icons: list[types.Icon] | None = None,
         seeding: WorkflowConversationSeeding | None = None,
         input_limit_bytes: int | None = None,
         settings_default: WorkflowSettings | None = None,
@@ -810,7 +794,7 @@ class WRP(Generic[LifespanResultT]):
         description: str | None = None,
         input_model: type[WorkflowInput] | None = None,
         output_model: type[WorkflowOutput] | None = None,
-        icons: list[Icon] | None = None,
+        icons: list[types.Icon] | None = None,
         seeding: WorkflowConversationSeeding | None = None,
         input_limit_bytes: int | None = None,
         settings_default: WorkflowSettings | None = None,
@@ -871,7 +855,7 @@ class WRP(Generic[LifespanResultT]):
         title: str | None = None,
         description: str | None = None,
         mime_type: str | None = None,
-        icons: list[Icon] | None = None,
+        icons: list[types.Icon] | None = None,
     ) -> Callable[[AnyFunction], AnyFunction]:
         """Decorator to register a function as a resource.
 
