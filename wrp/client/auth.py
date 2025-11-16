@@ -118,6 +118,13 @@ class OAuthContext:
         parsed = urlparse(server_url)
         return f"{parsed.scheme}://{parsed.netloc}"
 
+    def get_primary_redirect_uri(self) -> str:
+        """Return the first registered redirect URI or raise if none is configured."""
+        redirect_uris = self.client_metadata.redirect_uris
+        if redirect_uris is None or not redirect_uris:
+            raise OAuthFlowError("Client metadata has no redirect_uris configured")
+        return str(redirect_uris[0])
+
     def update_token_expiry(self, token: OAuthToken) -> None:
         """Update token expiry time."""
         if token.expires_in:
@@ -328,7 +335,7 @@ class OAuthClientProvider(httpx.Auth):
         auth_params = {
             "response_type": "code",
             "client_id": self.context.client_info.client_id,
-            "redirect_uri": str(self.context.client_metadata.redirect_uris[0]),
+            "redirect_uri": self.context.get_primary_redirect_uri(),
             "state": state,
             "code_challenge": pkce_params.code_challenge,
             "code_challenge_method": "S256",
@@ -370,7 +377,7 @@ class OAuthClientProvider(httpx.Auth):
         token_data = {
             "grant_type": "authorization_code",
             "code": auth_code,
-            "redirect_uri": str(self.context.client_metadata.redirect_uris[0]),
+            "redirect_uri": self.context.get_primary_redirect_uri(),
             "client_id": self.context.client_info.client_id,
             "code_verifier": code_verifier,
         }
