@@ -73,8 +73,8 @@ from typing_extensions import TypeVar
 
 from mcp.server.lowlevel.func_inspection import create_call_wrapper
 from mcp.server.lowlevel.helper_types import ReadResourceContents
-from mcp.shared.message import ServerMessageMetadata, SessionMessage
 
+from wrp.shared.message import ServerMessageMetadata, SessionMessage
 import wrp.types as types
 from wrp.shared.context import RequestContext
 from wrp.shared.exceptions import WrpError
@@ -362,22 +362,29 @@ class Server(Generic[LifespanResultT, RequestT]):
             async def handler(req: types.ReadResourceRequest):
                 result = await func(req.params.uri)
 
-                def create_content(data: str | bytes, mime_type: str | None):
+                def create_content(
+                    data: str | bytes,
+                    mime_type: str | None,
+                ) -> types.TextResourceContents | types.BlobResourceContents:
                     match data:
-                        case str() as data:
+                        case str() as text:
                             return types.TextResourceContents(
                                 uri=req.params.uri,
-                                text=data,
+                                text=text,
                                 mimeType=mime_type or "text/plain",
                             )
-                        case bytes() as data:
+                        case bytes() as blob_bytes:
                             import base64
 
                             return types.BlobResourceContents(
                                 uri=req.params.uri,
-                                blob=base64.b64encode(data).decode(),
+                                blob=base64.b64encode(blob_bytes).decode(),
                                 mimeType=mime_type or "application/octet-stream",
                             )
+
+                    # This should never happen if callers respect the signature,
+                    # but keeps the type system happy and fails loudly if misused.
+                    raise TypeError(f"Unsupported resource content type: {type(data)!r}")
 
                 match result:
                     case str() | bytes() as data:
@@ -389,8 +396,10 @@ class Server(Generic[LifespanResultT, RequestT]):
                         )
                         content = create_content(data, None)
                     case Iterable() as contents:
+                        typed_contents = cast(Iterable[ReadResourceContents], contents)
                         contents_list = [
-                            create_content(content_item.content, content_item.mime_type) for content_item in contents
+                            create_content(content_item.content, content_item.mime_type)
+                            for content_item in typed_contents
                         ]
                         return types.ServerResult(
                             types.ReadResourceResult(
@@ -713,7 +722,7 @@ class Server(Generic[LifespanResultT, RequestT]):
 
     # ---- System Events (lowlevel routing only) -----------------------------
     def system_events_subscribe(self):
-        def decorator(fn: Callable[[types.EventsSubscribeParams], Awaitable[types.EventsSubscribeResult]]):
+        def decorator(fn: Callable[[types.SystemEventsSubscribeParams], Awaitable[types.SystemEventsSubscribeResult]]):
             logger.debug("Registering handler for SystemEventsSubscribeRequest")
             async def handler(req: types.SystemEventsSubscribeRequest):
                 result = await fn(req.params)
@@ -723,7 +732,7 @@ class Server(Generic[LifespanResultT, RequestT]):
         return decorator
 
     def system_events_unsubscribe(self):
-        def decorator(fn: Callable[[types.EventsUnsubscribeParams], Awaitable[None]]):
+        def decorator(fn: Callable[[types.SystemEventsUnsubscribeParams], Awaitable[None]]):
             logger.debug("Registering handler for SystemEventsUnsubscribeRequest")
             async def handler(req: types.SystemEventsUnsubscribeRequest):
                 await fn(req.params)
@@ -790,7 +799,7 @@ class Server(Generic[LifespanResultT, RequestT]):
         return decorator
 
     def conversations_channels_list(self):
-        def decorator(fn: Callable[[types.RunsScope], Awaitable[types.ChannelsIndexResult]]):
+        def decorator(fn: Callable[[types.RunsScope], Awaitable[types.ChannelsListResult]]):
             async def handler(req: types.ChannelsListRequest):
                 return types.ServerResult(await fn(req.params.runs))
             self.request_handlers[types.ChannelsListRequest] = handler
