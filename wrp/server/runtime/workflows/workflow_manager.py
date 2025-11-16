@@ -20,10 +20,8 @@ from wrp.server.runtime.runs.types import RunMeta, RunOutcome
 from wrp.server.runtime.workflows.base import Workflow
 from wrp.server.runtime.conversations.seeding import WorkflowConversationSeeding
 from wrp.shared.context import LifespanContextT, RequestT
-from wrp.types import Icon, INVALID_PARAMS
+from wrp.types import WorkflowDescriptor, RunWorkflowResult, Icon, INVALID_PARAMS
 from .types import (
-    RunWorkflowResult,
-    WorkflowDescriptor,
     WorkflowInput,
     WorkflowOutput,
 )
@@ -182,7 +180,7 @@ class WorkflowManager:
         merged = {**base_dict, **(data or {})}
         inst = model.model_validate(merged)
         # keep canonical flag in the instance
-        inst = inst.model_copy(update={"_override_status": True})
+        inst._override_status = True
         self._settings[name] = inst
         self._settings_overridden[name] = True
         # persist (best-effort)
@@ -214,7 +212,7 @@ class WorkflowManager:
         model = wf.settings_default.__class__
         try:
             inst = model.model_validate(values)
-            inst = inst.model_copy(update={"_override_status": bool(overridden)})
+            inst._override_status = bool(overridden)
             self._settings[name] = inst
             self._settings_overridden[name] = bool(overridden)
         except Exception:

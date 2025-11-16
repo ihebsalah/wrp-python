@@ -4,7 +4,21 @@ from typing import Annotated, Any, Generic, Literal, TypeAlias, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, FileUrl, RootModel
 from pydantic.networks import AnyUrl, UrlConstraints
-from wrp.server.runtime.workflows.types import WorkflowDescriptor, RunWorkflowResult
+
+class Icon(BaseModel):
+    """An icon for display in user interfaces."""
+
+    src: str
+    """URL or data URI for the icon."""
+
+    mimeType: str | None = None
+    """Optional MIME type for the icon."""
+
+    sizes: list[str] | None = None
+    """Optional list of strings specifying icon dimensions (e.g., ["48x48", "96x96"])."""
+
+    model_config = ConfigDict(extra="allow")
+
 from wrp.server.runtime.runs.types import RunMeta, RunOutcome, RunState
 from wrp.server.runtime.conversations.types import (
     ChannelMeta,
@@ -13,6 +27,7 @@ from wrp.server.runtime.conversations.types import (
 from wrp.server.runtime.system_sessions.types import SystemSession
 from wrp.server.runtime.telemetry.events import TelemetrySpanView
 from wrp.server.runtime.telemetry.payloads.types import SpanPayloadEnvelope
+from wrp.errors import *
 
 """
 Workflow Runtime Protocol bindings for Python
@@ -140,47 +155,6 @@ class JSONRPCResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
-# SDK error codes
-CONNECTION_CLOSED = -32000
-# REQUEST_TIMEOUT = -32001  # the typescript sdk uses this
-# Standard JSON-RPC error codes
-PARSE_ERROR = -32700
-INVALID_REQUEST = -32600
-METHOD_NOT_FOUND = -32601
-INVALID_PARAMS = -32602
-INTERNAL_ERROR = -32603
-
-
-class ErrorData(BaseModel):
-    """Error information for JSON-RPC error responses."""
-
-    code: int
-    """The error type that occurred."""
-
-    message: str
-    """
-    A short description of the error. The message SHOULD be limited to a concise single
-    sentence.
-    """
-
-    data: Any | None = None
-    """
-    Additional information about the error. The value of this member is defined by the
-    sender (e.g. detailed error information, nested errors etc.).
-    """
-
-    model_config = ConfigDict(extra="allow")
-
-
-class JSONRPCError(BaseModel):
-    """A response to a request that indicates an error occurred."""
-
-    jsonrpc: Literal["2.0"]
-    id: str | int
-    error: ErrorData
-    model_config = ConfigDict(extra="allow")
-
-
 class JSONRPCMessage(RootModel[JSONRPCRequest | JSONRPCNotification | JSONRPCResponse | JSONRPCError]):
     pass
 
@@ -202,21 +176,6 @@ class BaseMetadata(BaseModel):
 
     If not provided, the name should be used for display.
     """
-
-
-class Icon(BaseModel):
-    """An icon for display in user interfaces."""
-
-    src: str
-    """URL or data URI for the icon."""
-
-    mimeType: str | None = None
-    """Optional MIME type for the icon."""
-
-    sizes: list[str] | None = None
-    """Optional list of strings specifying icon dimensions (e.g., ["48x48", "96x96"])."""
-
-    model_config = ConfigDict(extra="allow")
 
 
 class Implementation(BaseMetadata):
@@ -721,6 +680,23 @@ class ListWorkflowsRequest(Request[ListWorkflowsRequestParams | None, Literal["w
     params: ListWorkflowsRequestParams | None = None
 
 
+class WorkflowDescriptor(BaseModel):
+    """Public metadata for a registered workflow."""
+
+    name: str = Field(description="Unique workflow name.")
+    title: str | None = Field(default=None, description="Human-readable title.")
+    description: str | None = Field(default=None, description="What the workflow does.")
+    inputSchema: dict[str, Any] = Field(description="JSON schema for WorkflowInput.")
+    outputSchema: dict[str, Any] = Field(description="JSON schema for WorkflowOutput.")
+    icons: list[Icon] | None = Field(default=None, description="Optional icon list.")
+    settingsSchema: dict[str, Any] | None = Field(
+        default=None,
+        description="JSON schema for WorkflowSettings derived from the default instance.",
+    )
+
+    model_config = ConfigDict(extra="allow")
+
+
 class ListWorkflowsResult(Result):
     """Result of a 'workflows/list' request, containing the list of workflows."""
 
@@ -744,6 +720,18 @@ class RunWorkflowRequest(Request[RunWorkflowRequestParams, Literal["workflows/ru
 
     method: Literal["workflows/run"] = "workflows/run"
     params: RunWorkflowRequestParams
+
+
+class RunWorkflowResult(Result):
+    """Standardized run result envelope for workflows (wire type)."""
+
+    output: dict[str, Any] | None = Field(
+        default=None,
+        description="WorkflowOutput serialized to a JSON-compatible dict (dumped).",
+    )
+    isError: bool = Field(default=False, description="True if the run failed.")
+    error: str | None = Field(default=None, description="Error message when isError=True.")
+    model_config = ConfigDict(extra="allow")
 
 
 #

@@ -13,8 +13,8 @@ from mcp.server.fastmcp.utilities.logging import get_logger
 
 from wrp.server.runtime.exceptions import WorkflowError
 from wrp.server.runtime.conversations.seeding import WorkflowConversationSeeding
-from wrp.types import Icon
-from .types import WorkflowDescriptor, WorkflowInput, WorkflowOutput
+from wrp.types import Icon, WorkflowDescriptor
+from .types import WorkflowInput, WorkflowOutput
 from wrp.server.runtime.settings.workflows import WorkflowSettings
 
 logger = get_logger(__name__)

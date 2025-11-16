@@ -29,7 +29,7 @@ dependencies = [
   "pydantic>=2.12.4",
   "cryptography>=46.0.3",
   "jsonschema>=4.25.1",
-  "psycopg>=3.2.12",
+  "psycopg[binary]>=3.2.12",
   "openai-agents>=0.5.1",
 ]
 

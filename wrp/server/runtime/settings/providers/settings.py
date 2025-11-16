@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 
 class ProviderSettings(BaseModel):
@@ -18,7 +18,7 @@ class ProviderSettings(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     # Internal, instance-scoped flag; registry also exposes a canonical view.
-    _override_status: bool = Field(default=False, exclude=True)
+    _override_status: bool = PrivateAttr(default=False)
 
     # Field-level locks (declare in subclasses: e.g., `locked = {"endpoint"}`).
     locked: ClassVar[set[str]] = set()

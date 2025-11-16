@@ -6,7 +6,7 @@ from mcp.server.stdio import stdio_server
 from wrp.server.session import ServerSession
 from wrp.client.session import ClientSession
 from wrp.shared.exceptions import WrpError
-from wrp.server.runtime.workflows.types import WorkflowInput, WorkflowOutput, WorkflowDescriptor
+from wrp.server.runtime.workflows.types import WorkflowInput, WorkflowOutput
 from .types import (
     ClientCapabilities,
     ClientNotification,
@@ -36,7 +36,6 @@ from .types import (
     Resource,
     ResourcesCapability,
     ResourceUpdatedNotification,
-    WorkflowDescriptor,
     WorkflowsCapability,
     WorkflowsListChangedNotification,
     RootsCapability,
@@ -47,6 +46,7 @@ from .types import (
     SetLevelRequest,
     SubscribeRequest,
     UnsubscribeRequest,
+    Icon,
 )
 
 __all__ = [
@@ -80,7 +80,6 @@ __all__ = [
     "Resource",
     "ResourcesCapability",
     "ResourceUpdatedNotification",
-    "WorkflowDescriptor",
     "WorkflowInput",
     "WorkflowOutput",
     "WorkflowsCapability",
@@ -98,4 +97,5 @@ __all__ = [
     "stdio_client",
     "stdio_server",
     "JSONRPCResponse",
+    "Icon",
 ]

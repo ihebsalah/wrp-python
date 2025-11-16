@@ -3,7 +3,7 @@
 
 from typing import Any
 from wrp.shared.exceptions import WrpError
-from wrp.types import ErrorData, INTERNAL_ERROR, INVALID_REQUEST
+from wrp.errors import ErrorData, INTERNAL_ERROR, INVALID_REQUEST
 
 class InvalidSignature(WrpError):
     """Invalid signature"""

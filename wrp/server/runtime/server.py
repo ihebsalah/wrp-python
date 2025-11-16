@@ -66,7 +66,7 @@ from wrp.server.runtime.telemetry.privacy.redaction import sanitize_envelope_dic
 from wrp.server.runtime.telemetry.views import build_span_index, get_span_view, list_span_views
 from wrp.server.runtime.workflows import WorkflowManager
 from wrp.server.runtime.settings.workflows import WorkflowSettings
-from wrp.server.runtime.workflows.types import RunWorkflowResult, WorkflowInput, WorkflowOutput
+from wrp.server.runtime.workflows.types import WorkflowInput, WorkflowOutput
 from wrp.server.session import ServerSession, ServerSessionT
 from wrp.shared.context import LifespanContextT, RequestContext, RequestT
 from wrp.shared.version import SUPPORTED_PROTOCOL_VERSIONS as WRP_SUPPORTED_VERSIONS
@@ -591,7 +591,7 @@ class WRP(Generic[LifespanResultT]):
         """Return public descriptors for all registered workflows (no pagination)."""
         return types.ListWorkflowsResult(workflows=self._workflow_manager.list_descriptors())
 
-    async def _run_workflow(self, name: str, wf_input: dict[str, Any]) -> RunWorkflowResult:
+    async def _run_workflow(self, name: str, wf_input: dict[str, Any]) -> types.RunWorkflowResult:
         """Run a workflow by name with a dict payload matching its WorkflowInput.
 
         Note: This uses the current request context if available. Outside a request,

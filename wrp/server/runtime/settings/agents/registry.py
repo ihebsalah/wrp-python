@@ -82,7 +82,7 @@ class AgentSettingsRegistry:
 
         merged: Dict[str, Any] = {**base_dict, **(values or {})}
         inst = model.model_validate(merged)
-        inst = inst.model_copy(update={"_override_status": True})
+        inst._override_status = True
         self._settings[name] = inst
         self._settings_overridden[name] = True
 
@@ -118,7 +118,7 @@ class AgentSettingsRegistry:
         model = self._defaults[name].__class__
         try:
             inst = model.model_validate(values)
-            inst = inst.model_copy(update={"_override_status": bool(overridden)})
+            inst._override_status = bool(overridden)
             self._settings[name] = inst
             self._settings_overridden[name] = bool(overridden)
         except Exception:
@@ -150,7 +150,7 @@ class AgentSettingsRegistry:
             model = self._defaults[name].__class__
             try:
                 inst = model.model_validate(values)
-                inst = inst.model_copy(update={"_override_status": bool(overridden)})
+                inst._override_status = bool(overridden)
                 self._settings[name] = inst
                 self._settings_overridden[name] = bool(overridden)
             except Exception:

@@ -1,7 +1,7 @@
 # wrp/server/runtime/runs/bindings.py
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from pydantic import BaseModel, ConfigDict, Field
 
 from wrp.server.runtime.exceptions import RunStateError, WorkflowMarkedError, WorkflowMarkedFailure
@@ -9,7 +9,9 @@ from wrp.server.runtime.exceptions import RunStateError, WorkflowMarkedError, Wo
 from wrp.server.runtime.conversations.seeding import ConversationSeeding, SeedingRunFilter, default_conversation_seeding
 from .types import RunOutcome, RunState
 from ..telemetry.service import RunTelemetryService
-from wrp.server.runtime.conversations.service import ConversationsService
+
+if TYPE_CHECKING:
+    from wrp.server.runtime.conversations.service import ConversationsService
 
 
 class RunBindings(BaseModel):

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 
 class AgentSettings(BaseModel):
@@ -23,7 +23,7 @@ class AgentSettings(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    _override_status: bool = Field(default=False, exclude=True)
+    _override_status: bool = PrivateAttr(default=False)
     locked: ClassVar[set[str]] = set()
 
     def settings_overridden(self) -> bool:

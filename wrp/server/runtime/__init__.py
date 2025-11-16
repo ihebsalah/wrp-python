@@ -4,8 +4,7 @@ from importlib.metadata import version
 
 from mcp.server.fastmcp.utilities.types import Audio, Image
 
-from wrp.types import Icon
 from .server import Context, WRP
 
-__version__ = version("wrp")
-__all__ = ["WRP", "Context", "Image", "Audio", "Icon"]
+__version__ = version("wrp-python")
+__all__ = ["WRP", "Context", "Image", "Audio"]
