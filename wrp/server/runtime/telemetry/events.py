@@ -36,8 +36,8 @@ class SpanEndMixin(BaseModel):
 
 # -------- RUN --------
 class RunSpanStart(SpanBase):
-    span_kind: Literal["run"] = "run"
-    phase: Literal["start"] = "start"
+    span_kind: SpanKind = "run"
+    phase: SpanPhase = "start"
     thread_id: str | None = None
     input_keys: list[str] | None = None
     input_size_bytes: int | None = None
@@ -45,8 +45,8 @@ class RunSpanStart(SpanBase):
 
 
 class RunSpanEnd(SpanBase, SpanEndMixin):
-    span_kind: Literal["run"] = "run"
-    phase: Literal["end"] = "end"
+    span_kind: SpanKind = "run"
+    phase: SpanPhase = "end"
     outcome: RunOutcome | None = None
     output_keys: list[str] | None = None
     output_size_bytes: int | None = None
@@ -54,32 +54,32 @@ class RunSpanEnd(SpanBase, SpanEndMixin):
 
 # -------- AGENT --------
 class AgentSpanStart(SpanBase):
-    span_kind: Literal["agent"] = "agent"
-    phase: Literal["start"] = "start"
+    span_kind: SpanKind = "agent"
+    phase: SpanPhase = "start"
     agent: str  # same as name^
     agent_id: str | None = None
     model: str | None = None
 
 
 class AgentSpanEnd(SpanBase, SpanEndMixin):
-    span_kind: Literal["agent"] = "agent"
-    phase: Literal["end"] = "end"
+    span_kind: SpanKind = "agent"
+    phase: SpanPhase = "end"
     agent: str
     agent_id: str | None = None
 
 
 # -------- LLM --------
 class LlmSpanStart(SpanBase):
-    span_kind: Literal["llm"] = "llm"
-    phase: Literal["start"] = "start"
+    span_kind: SpanKind = "llm"
+    phase: SpanPhase = "start"
     agent: str
     agent_id: str | None = None
     model: str | None = None
 
 
 class LlmSpanEnd(SpanBase, SpanEndMixin):
-    span_kind: Literal["llm"] = "llm"
-    phase: Literal["end"] = "end"
+    span_kind: SpanKind = "llm"
+    phase: SpanPhase = "end"
     agent: str
     agent_id: str | None = None
     model: str | None = None
@@ -87,16 +87,16 @@ class LlmSpanEnd(SpanBase, SpanEndMixin):
 
 # -------- TOOL --------
 class ToolSpanStart(SpanBase):
-    span_kind: Literal["tool"] = "tool"
-    phase: Literal["start"] = "start"
+    span_kind: SpanKind = "tool"
+    phase: SpanPhase = "start"
     agent: str | None = None
     agent_id: str | None = None
     tool: str
 
 
 class ToolSpanEnd(SpanBase, SpanEndMixin):
-    span_kind: Literal["tool"] = "tool"
-    phase: Literal["end"] = "end"
+    span_kind: SpanKind = "tool"
+    phase: SpanPhase = "end"
     agent: str | None = None
     agent_id: str | None = None
     tool: str
@@ -104,8 +104,8 @@ class ToolSpanEnd(SpanBase, SpanEndMixin):
 
 # -------- POINT SPANS --------
 class HandoffSpanPoint(SpanBase):
-    span_kind: Literal["handoff"] = "handoff"
-    phase: Literal["point"] = "point"
+    span_kind: SpanKind = "handoff"
+    phase: SpanPhase = "point"
     from_agent: str
     to_agent: str
     # minimal public headers only; full snapshots live in payload
@@ -116,8 +116,8 @@ class HandoffSpanPoint(SpanBase):
 
 
 class AnnotationSpanPoint(SpanBase):
-    span_kind: Literal["annotation"] = "annotation"
-    phase: Literal["point"] = "point"
+    span_kind: SpanKind = "annotation"
+    phase: SpanPhase = "point"
     # keep sensitive message/data in payload; only level is public
     level: Literal["debug", "info", "warning", "error"] = "info"
     # short preview shown in span headers (full text stays in payload)
@@ -125,8 +125,8 @@ class AnnotationSpanPoint(SpanBase):
 
 
 class GuardrailSpanPoint(SpanBase):
-    span_kind: Literal["guardrail"] = "guardrail"
-    phase: Literal["point"] = "point"
+    span_kind: SpanKind = "guardrail"
+    phase: SpanPhase = "point"
     guardrail_kind: Literal["input", "output"]
     status: Literal["ok", "trip", "error"]
     # quick filters in headers (non-sensitive):
