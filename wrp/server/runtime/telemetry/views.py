@@ -35,7 +35,7 @@ def build_span_index(
     """
     spans: Dict[str, Dict[str, Any]] = {}
 
-    def ensure(sid: str, kind: str, name: str, ts: datetime) -> Dict[str, Any]:
+    def ensure(sid: str, kind: str, name: str, ts: Optional[datetime]) -> Dict[str, Any]:
         if sid not in spans:
             spans[sid] = {
                 "span_id": sid,
