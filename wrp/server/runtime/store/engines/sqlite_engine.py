@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from .engine import Engine
 
@@ -49,15 +49,36 @@ class SqliteEngine(Engine):
 
     def execute(self, sql: str, params: Iterable[Any] | Mapping[str, Any] | None = None) -> None:
         assert self._conn is not None, "Engine not connected"
-        self._conn.execute(self.render(sql), [] if params is None else params)
+        if params is None:
+            adapted_params: Sequence[Any] | Mapping[str, Any] = []
+        elif isinstance(params, Mapping):
+            adapted_params = params
+        else:
+            adapted_params = list(params)
+
+        self._conn.execute(self.render(sql), adapted_params)
 
     def query_one(self, sql: str, params: Iterable[Any] | Mapping[str, Any] | None = None) -> dict | None:
         assert self._conn is not None, "Engine not connected"
-        cur = self._conn.execute(self.render(sql), [] if params is None else params)
+        if params is None:
+            adapted_params: Sequence[Any] | Mapping[str, Any] = []
+        elif isinstance(params, Mapping):
+            adapted_params = params
+        else:
+            adapted_params = list(params)
+
+        cur = self._conn.execute(self.render(sql), adapted_params)
         row = cur.fetchone()
         return dict(row) if row else None
 
     def query_all(self, sql: str, params: Iterable[Any] | Mapping[str, Any] | None = None) -> list[dict]:
         assert self._conn is not None, "Engine not connected"
-        cur = self._conn.execute(self.render(sql), [] if params is None else params)
+        if params is None:
+            adapted_params: Sequence[Any] | Mapping[str, Any] = []
+        elif isinstance(params, Mapping):
+            adapted_params = params
+        else:
+            adapted_params = list(params)
+
+        cur = self._conn.execute(self.render(sql), adapted_params)
         return [dict(r) for r in cur.fetchall()]

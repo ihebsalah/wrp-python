@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional, Sequence, cast
 
 import psycopg
 from psycopg.rows import dict_row
+from typing_extensions import LiteralString
 
 from .engine import Engine
 
@@ -22,16 +23,22 @@ class PostgresEngine(Engine):
         self.min_size = min_size
         self.max_size = max_size
         self.statement_timeout_ms = statement_timeout_ms
-        self.pool: Optional[psycopg.Connection] = None
+        self.pool: Optional[psycopg.Connection[Any]] = None
         self.paramstyle = "pyformat"  # we'll use %s placeholders
 
     def connect(self) -> None:
         if self.pool:
             return
         # simple pooled connection (psycopg "connection as pool" with .cursor())
-        self.pool = psycopg.connect(self.dsn, row_factory=dict_row)
+        # Cast row_factory to Any to work around row_factory variance issues in type stubs:
+        # dict_row is a valid row factory for psycopg.connect().
+        self.pool = psycopg.connect(self.dsn, row_factory=cast(Any, dict_row))
         with self.pool.cursor() as cur:
-            cur.execute(f"SET statement_timeout = {self.statement_timeout_ms};")
+            # Use a literal query string and pass the timeout as a parameter.
+            cur.execute(
+                "SET statement_timeout = %s;",
+                (self.statement_timeout_ms,),
+            )
 
     def close(self) -> None:
         if self.pool:
@@ -47,17 +54,44 @@ class PostgresEngine(Engine):
     def execute(self, sql: str, params: Iterable[Any] | Mapping[str, Any] | None = None) -> None:
         assert self.pool is not None, "Engine not connected"
         with self.pool.cursor() as cur:
-            cur.execute(self.render(sql), [] if params is None else params)
+            query: LiteralString = cast(LiteralString, self.render(sql))
+
+            if params is None:
+                adapted_params: Sequence[Any] | Mapping[str, Any] | None = None
+            elif isinstance(params, Mapping):
+                adapted_params = params
+            else:
+                adapted_params = list(params)
+
+            cur.execute(query, adapted_params)
 
     def query_one(self, sql: str, params: Iterable[Any] | Mapping[str, Any] | None = None) -> dict | None:
         assert self.pool is not None, "Engine not connected"
         with self.pool.cursor() as cur:
-            cur.execute(self.render(sql), [] if params is None else params)
+            query: LiteralString = cast(LiteralString, self.render(sql))
+
+            if params is None:
+                adapted_params: Sequence[Any] | Mapping[str, Any] | None = None
+            elif isinstance(params, Mapping):
+                adapted_params = params
+            else:
+                adapted_params = list(params)
+
+            cur.execute(query, adapted_params)
             row = cur.fetchone()
             return dict(row) if row else None
 
     def query_all(self, sql: str, params: Iterable[Any] | Mapping[str, Any] | None = None) -> list[dict]:
         assert self.pool is not None, "Engine not connected"
         with self.pool.cursor() as cur:
-            cur.execute(self.render(sql), [] if params is None else params)
+            query: LiteralString = cast(LiteralString, self.render(sql))
+
+            if params is None:
+                adapted_params: Sequence[Any] | Mapping[str, Any] | None = None
+            elif isinstance(params, Mapping):
+                adapted_params = params
+            else:
+                adapted_params = list(params)
+
+            cur.execute(query, adapted_params)
             return [dict(r) for r in cur.fetchall()]

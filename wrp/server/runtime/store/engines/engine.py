@@ -5,8 +5,12 @@ from contextlib import contextmanager
 from typing import Any, Iterable, Mapping, Protocol
 
 
-class Row(Mapping[str, Any], Protocol):  # structural typing
-    ...
+class Row(Protocol):  # structural typing: mapping-like row
+    def __getitem__(self, key: str) -> Any: ...
+
+    def __iter__(self) -> Iterable[str]: ...
+
+    def __len__(self) -> int: ...
 
 
 class Engine(Protocol):
