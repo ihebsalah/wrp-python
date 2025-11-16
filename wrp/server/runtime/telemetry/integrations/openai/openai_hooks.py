@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 # Agents SDK
 from agents.agent import Agent
+from agents.model_settings import ModelSettings
 from agents.items import ModelResponse, TResponseInputItem
 from agents.lifecycle import RunHooksBase
 from agents.run_context import RunContextWrapper
@@ -114,43 +115,16 @@ def _maybe_tool_args_and_id(ctx: Any) -> tuple[str | None, str | None]:
     return (call_id, args_raw)
 
 
-def _model_settings_to_dict(ms: Any) -> Optional[Dict[str, Any]]:
+def _model_settings_to_dict(ms: Optional[ModelSettings]) -> Optional[Dict[str, Any]]:
     """
-    Best-effort JSON-ish dict for ModelSettings (dataclass / pydantic / plain obj).
+    JSON-safe dict for ModelSettings.
     Note: this is the agent-level config; the *effective* per-call settings (after
     run_config overrides and tool-choice resets) are not available here.
     """
     if ms is None:
         return None
     try:
-        # dataclass
-        from dataclasses import is_dataclass
-        if is_dataclass(ms):
-            d = asdict(ms)
-        # pydantic-like
-        elif hasattr(ms, "model_dump"):
-            d = ms.model_dump(exclude_none=True)  # type: ignore[attr-defined]
-        # plain dict
-        elif isinstance(ms, dict):
-            d = dict(ms)
-        else:
-            # fallback: shallow __dict__ without privates/callables
-            d = {
-                k: v
-                for k, v in getattr(ms, "__dict__", {}).items()
-                if not k.startswith("_") and not callable(v)
-            }
-        # prune obviously non-JSONables (keep it safe)
-        jsonable: Dict[str, Any] = {}
-        from enum import Enum
-        for k, v in d.items():
-            if isinstance(v, Enum):
-                jsonable[k] = v.value
-            elif isinstance(v, (str, int, float, bool)) or v is None:
-                jsonable[k] = v
-            elif isinstance(v, (list, dict)):
-                jsonable[k] = v
-        return jsonable
+        return ms.to_json_dict()
     except Exception:
         return None
 
@@ -182,13 +156,13 @@ async def _agent_handoff_snapshot(
         "agent_id": _agent_id_str(agent),
         "model": _safe_model_name(agent),
         "system_prompt": system_prompt,
-        "model_settings": _model_settings_to_dict(getattr(agent, "model_settings", None)),
+        "model_settings": _model_settings_to_dict(agent.model_settings),
         "output_type": _output_type_label(agent),
         "tools": _tool_descriptors(agent),
-        "mcp_servers": _mcp_server_descriptors(getattr(agent, "mcp_servers", None)),
-        "mcp_config": dict(getattr(agent, "mcp_config", {}) or {}),
-        "input_guardrails": _guardrail_descriptors(getattr(agent, "input_guardrails", None)),
-        "output_guardrails": _guardrail_descriptors(getattr(agent, "output_guardrails", None)),
+        "mcp_servers": _mcp_server_descriptors(agent.mcp_servers),
+        "mcp_config": dict(agent.mcp_config or {}),
+        "input_guardrails": _guardrail_descriptors(agent.input_guardrails),
+        "output_guardrails": _guardrail_descriptors(agent.output_guardrails),
     }
 
 
@@ -216,7 +190,7 @@ class OpenAITelemetryHooks(RunHooksBase[Any, Agent[Any]]):
             system_prompt = await agent.get_system_prompt(context)
         except Exception:
             system_prompt = None
-        ms_dict = _model_settings_to_dict(getattr(agent, "model_settings", None))
+        ms_dict = _model_settings_to_dict(agent.model_settings)
 
         span_id = await self._ctx.run.telemetry.agent_start(
             agent=agent.name,
@@ -295,7 +269,7 @@ class OpenAITelemetryHooks(RunHooksBase[Any, Agent[Any]]):
         system_prompt: Optional[str],
         input_items: List[TResponseInputItem],
     ) -> None:
-        ms_dict = _model_settings_to_dict(getattr(agent, "model_settings", None))
+        ms_dict = _model_settings_to_dict(agent.model_settings)
         span_id = await self._ctx.run.telemetry.llm_start(
             agent=agent.name,
             model=_safe_model_name(agent),

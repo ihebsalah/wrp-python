@@ -6,10 +6,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-try:
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-except Exception:  # pragma: no cover
-    AESGCM = None  # type: ignore
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
 def _rand_bytes(n: int) -> bytes:
