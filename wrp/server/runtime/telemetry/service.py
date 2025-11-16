@@ -5,7 +5,7 @@ import hashlib
 import json
 import time
 import uuid
-from typing import Any, Dict, Iterable, Literal, cast
+from typing import Any, Dict, Iterable, Literal, cast, Callable, Awaitable
 
 from pydantic import BaseModel
 
@@ -58,7 +58,7 @@ class RunTelemetryService:
         self,
         store: Store,
         current_run: RunMeta,
-        on_payload_update: "callable[[str], Any] | None" = None,
+        on_payload_update: Callable[[str], Awaitable[None]] | None = None,
     ):
         self._store = store
         self._run = current_run
