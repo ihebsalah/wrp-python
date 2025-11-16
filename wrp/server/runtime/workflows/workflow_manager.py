@@ -20,7 +20,7 @@ from wrp.server.runtime.runs.types import RunMeta, RunOutcome
 from wrp.server.runtime.workflows.base import Workflow
 from wrp.server.runtime.conversations.seeding import WorkflowConversationSeeding
 from wrp.shared.context import LifespanContextT, RequestT
-from wrp.types import Icon
+from wrp.types import Icon, INVALID_PARAMS
 from .types import (
     RunWorkflowResult,
     WorkflowDescriptor,
@@ -99,7 +99,7 @@ class WorkflowManager:
         self._workflows[wf.name] = wf
         # initialize current settings (copy default)
         if wf.settings_default is not None:
-            inst = wf.settings_default.model_copy(deep=True)
+            inst = wf.settings_default.copy(deep=True)
             # propagate initial flag to instance
             inst._override_status = False
             self._settings[wf.name] = inst
@@ -128,7 +128,7 @@ class WorkflowManager:
             cur._override_status = bool(self._settings_overridden.get(name, False))
             return cur
         # fall back to default if somehow absent
-        cur = wf.settings_default.model_copy(deep=True)
+        cur = wf.settings_default.copy(deep=True)
         cur._override_status = False
         self._settings[name] = cur
         self._settings_overridden[name] = False
@@ -159,9 +159,15 @@ class WorkflowManager:
         """
         wf = self.get(name)
         if not wf or wf.settings_default is None:
-            raise WorkflowError(f"Workflow '{name}' does not declare settings (no default provided)")
+            raise WorkflowError(
+                f"Workflow '{name}' does not declare settings (no default provided)",
+                code=INVALID_PARAMS,
+            )
         if not wf.settings_allow_override:
-            raise WorkflowError(f"Workflow '{name}' does not allow settings overrides")
+            raise WorkflowError(
+                f"Workflow '{name}' does not allow settings overrides",
+                code=INVALID_PARAMS,
+            )
         model = wf.settings_default.__class__
         # current + field locks enforcement
         current = self.get_settings(name)
@@ -169,7 +175,10 @@ class WorkflowManager:
         locked = getattr(model, "locked", set()) or set()
         for k in data or {}:
             if k in locked and (k in base_dict) and data[k] != base_dict[k]:
-                raise WorkflowError(f"Setting '{k}' is locked and cannot be overridden")
+                raise WorkflowError(
+                    f"Setting '{k}' is locked and cannot be overridden",
+                    code=INVALID_PARAMS,
+                )
         merged = {**base_dict, **(data or {})}
         inst = model.model_validate(merged)
         # keep canonical flag in the instance

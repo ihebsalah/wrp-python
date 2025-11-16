@@ -208,7 +208,7 @@ class WRP(Generic[LifespanResultT]):
             instructions=instructions,
             website_url=website_url,
             icons=icons,
-            # TODO(Marcelo): It seems there's a type mismatch between the lifespan type from an WRP and Server.
+            # TODO(Marcelo): It seems there's a type mismatch between the lifespan type from a WRP and Server.
             # We need to create a Lifespan type that is a generic on the server type, like Starlette does.
             lifespan=(lifespan_wrapper(self, self.settings.lifespan) if self.settings.lifespan else default_lifespan),  # type: ignore
         )

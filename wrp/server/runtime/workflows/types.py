@@ -3,7 +3,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from mcp.types import Icon
+from wrp.types import Icon
 
 
 class WorkflowInput(BaseModel):

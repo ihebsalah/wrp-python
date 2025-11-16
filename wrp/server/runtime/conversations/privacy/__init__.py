@@ -3,11 +3,11 @@ from __future__ import annotations
 
 from .policy import ConversationResourcePolicy, Visibility
 from .redaction import sanitize_conversation_items
-from .guards import is_private_only_conversations_uri
+from .guards import is_private_only_conversations_selector
 
 __all__ = [
     "ConversationResourcePolicy",
     "Visibility",
     "sanitize_conversation_items",
-    "is_private_only_conversations_uri",
+    "is_private_only_conversations_selector",
 ]
