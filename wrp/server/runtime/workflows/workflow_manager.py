@@ -324,12 +324,12 @@ class WorkflowManager:
             conversation_seeding=opts.conversation_seeding,
             seeding_run_filter=opts.seeding_run_filter,
             allowed_channels=allowed_channels,
-            on_update=ctx.wrp.notify_resource_updated,
+            emit_system_event=ctx.wrp._emit_system_event,
         )
         telemetry_service = RunTelemetryService(
             store,
             meta,
-            on_payload_update=ctx.wrp.notify_resource_updated,
+            emit_system_event=ctx.wrp._emit_system_event,
         )
         bindings = RunBindings(
             run_id=run_id,

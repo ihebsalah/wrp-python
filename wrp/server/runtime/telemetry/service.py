@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, Literal, cast, Callable, Awaitable
 
 from pydantic import BaseModel
 
+import wrp.types as types
 from wrp.server.runtime.runs.types import RunMeta, RunOutcome, RunState, RunSettings
 from wrp.server.runtime.telemetry.payloads.types import (
     AgentEndPayload,
@@ -58,11 +59,11 @@ class RunTelemetryService:
         self,
         store: Store,
         current_run: RunMeta,
-        on_payload_update: Callable[[str], Awaitable[None]] | None = None,
+        emit_system_event: Callable[..., Awaitable[None]] | None = None,
     ):
         self._store = store
         self._run = current_run
-        self._on_payload_update = on_payload_update
+        self._emit_system_event = emit_system_event
         # minimal bookkeeping
         self._span_t0_ns: Dict[str, int] = {}
         self._span_name: Dict[str, str] = {}
@@ -166,12 +167,22 @@ class RunTelemetryService:
         )
         await self._store.upsert_span_payload(self._run.system_session_id, self._run.run_id, envelope)
         payload_id = span_id
-        # push payload-updated signal if a notifier is wired
-        try:
-            if self._on_payload_update:
-                await self._on_payload_update(payload_id)
-        except Exception:
-            pass
+        # push payload-updated system event if wired
+        if self._emit_system_event:
+            try:
+                span_scope = types.SpanScope(
+                    system_session_id=self._run.system_session_id,
+                    run_id=self._run.run_id,
+                    span_id=span_id,
+                )
+                await self._emit_system_event(
+                    topic="telemetry/payload",
+                    change="refetch",
+                    span=span_scope,
+                )
+            except Exception:
+                # best-effort only; never break telemetry on fan-out issues
+                pass
         return payload_id
 
     # ------------ RUN (flat) ------------

@@ -10,6 +10,7 @@ from wrp.server.runtime.store.base import Store
 from wrp.server.runtime.store.codecs import serializer
 from .assembler import assemble_seed, select_runs
 from .seeding import ConversationSeeding, SeedingRunFilter, default_conversation_seeding
+import wrp.types as types
 
 
 def _string_to_payload(text: str, *, role: str = "user", content_type: str = "text") -> dict:
@@ -32,14 +33,14 @@ class ConversationsService:
         conversation_seeding: ConversationSeeding | None = None,
         seeding_run_filter: SeedingRunFilter | None = None,
         allowed_channels: Set[str] | None = None,
-        on_update: Callable[[str], Awaitable[None]] | None = None,
+        emit_system_event: Callable[..., Awaitable[None]] | None = None,
     ):
         self._store = store
         self._run = current_run
         self._seeding = conversation_seeding or default_conversation_seeding()
         self._filter = seeding_run_filter or SeedingRunFilter()
         self._allowed_channels = allowed_channels
-        self._on_update = on_update
+        self._emit_system_event = emit_system_event
 
     async def add_item(
         self,
@@ -76,16 +77,35 @@ class ConversationsService:
             items = [to_item(item_or_items)]
         else:
             items = [to_item(d) for d in item_or_items]
-        await self._store.append_conversation_channel_item(self._run.system_session_id, self._run.run_id, items)
+        await self._store.append_conversation_channel_item(
+            self._run.system_session_id, self._run.run_id, items
+        )
 
-        # notify resource subscribers (best-effort)
-        if self._on_update:
+        # notify conversation subscribers via system events (best-effort)
+        if self._emit_system_event:
             try:
-                # whole-run conversation
-                await self._on_update(f"resource://system_sessions/{self._run.system_session_id}/runs/{self._run.run_id}/conversations")
-                # channel-specific (notify the channel actually used)
-                await self._on_update(f"resource://system_sessions/{self._run.system_session_id}/runs/{self._run.run_id}/conversations/{channel}")
+                runs_scope = types.RunsScope(
+                    system_session_id=self._run.system_session_id,
+                    run_id=self._run.run_id,
+                )
+                # channels index for this run
+                await self._emit_system_event(
+                    topic="conversations/channels",
+                    change="refetch",
+                    runs=runs_scope,
+                )
+                # specific channel for this run
+                await self._emit_system_event(
+                    topic="conversations/channel",
+                    change="refetch",
+                    channel=types.ChannelScope(
+                        system_session_id=self._run.system_session_id,
+                        run_id=self._run.run_id,
+                        channel=channel,
+                    ),
+                )
             except Exception:
+                # best-effort only; don't break authors' workflows
                 pass
 
     async def _collect_seed(self, *, channel: str | None) -> list[dict[str, Any]]:

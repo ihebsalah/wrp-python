@@ -272,9 +272,9 @@ class ResourcesCapability(BaseModel):
 class WorkflowSettingsCapability(BaseModel):
     """Flags for reading/updating workflow settings + schema."""
 
-    read: bool | None = None  # resource://workflows/{wf}/settings
+    read: bool | None = None  # /workflows/{wf}/settings
     update: bool | None = None  # HTTP PUT /workflows/{wf}/settings
-    jsonSchema: bool | None = None  # resource://workflows/{wf}/settings/schema
+    jsonSchema: bool | None = None  # /workflows/{wf}/settings/schema
     model_config = ConfigDict(extra="allow")
 
 
