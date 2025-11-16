@@ -59,7 +59,7 @@ from wrp.server.runtime.runs.bindings import RunBindings
 from wrp.server.runtime.store.base import Store
 from wrp.server.runtime.store.stores.memory_store import InMemoryStore
 from wrp.server.runtime.telemetry.payloads.types import SpanPayloadEnvelope
-from wrp.server.runtime.telemetry.privacy.guards import is_private_only_span_payload_uri
+from wrp.server.runtime.telemetry.privacy.guards import is_private_only_span_payload
 from wrp.server.runtime.telemetry.privacy.policy import TelemetryResourcePolicy
 from wrp.server.runtime.telemetry.privacy.redaction import sanitize_envelope_dict
 from wrp.server.runtime.telemetry.views import build_span_index, get_span_view, list_span_views
@@ -608,6 +608,16 @@ class WRP(Generic[LifespanResultT]):
         return types.TelemetrySpanReadResult(span=get_span_view(spans, span.span_id))
 
     async def _telemetry_payload_read(self, span: types.SpanScope) -> types.TelemetryPayloadReadResult:
+        # If this span's payload is private-only under the current policy, hide it entirely.
+        if await is_private_only_span_payload(
+            span.system_session_id,
+            span.run_id,
+            span.span_id,
+            self._telemetry_policy,
+            self.store,
+        ):
+            return types.TelemetryPayloadReadResult(payload=None)
+
         env = await self.store.get_span_payload(span.system_session_id, span.run_id, span.span_id)
         if not env:
             return types.TelemetryPayloadReadResult(payload=None)

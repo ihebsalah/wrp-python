@@ -14,7 +14,7 @@ from .privacy import (
     RedactRules,
     vis,
     sanitize_envelope_dict,
-    is_private_only_span_payload_uri,
+    is_private_only_span_payload,
     presets as telemetry_privacy_presets,
 )
 
@@ -34,6 +34,6 @@ __all__ = [
     "RedactRules",
     "vis",
     "sanitize_envelope_dict",
-    "is_private_only_span_payload_uri",
+    "is_private_only_span_payload",
     "telemetry_privacy_presets",
 ]

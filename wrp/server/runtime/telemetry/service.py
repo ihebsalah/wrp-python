@@ -118,10 +118,6 @@ class RunTelemetryService:
     def _close_span(self, span_id: str) -> None:
         return
 
-    def _payload_uri(self, span_id: str) -> str:
-        """Generate a resource URI for a span's payload."""
-        return f"resource://system_sessions/{self._run.system_session_id}/runs/{self._run.run_id}/telemetry/spans/{span_id}/payload"
-
     def _to_bytes_for_hash(self, data: Any, mime: str) -> bytes:
         """Serialize data to bytes for hashing, with a canonical JSON fallback."""
         if data is None:
@@ -154,7 +150,8 @@ class RunTelemetryService:
         redacted: bool = False,
     ) -> str:
         """
-        Create/merge payload envelope for this span and persist it. Returns its resource URI.
+        Create/merge payload envelope for this span and persist it.
+        Returns the payload id for this span (currently equal to span_id).
         """
         parts: dict[str, PayloadPart] = {}
         if payload is not None:
@@ -168,14 +165,14 @@ class RunTelemetryService:
             redacted=redacted,
         )
         await self._store.upsert_span_payload(self._run.system_session_id, self._run.run_id, envelope)
-        uri = self._payload_uri(span_id)
-        # push resource/updated if a notifier is wired
+        payload_id = span_id
+        # push payload-updated signal if a notifier is wired
         try:
             if self._on_payload_update:
-                await self._on_payload_update(uri)
+                await self._on_payload_update(payload_id)
         except Exception:
             pass
-        return uri
+        return payload_id
 
     # ------------ RUN (flat) ------------
     async def run_start(
@@ -194,7 +191,7 @@ class RunTelemetryService:
 
         # build + capture payload under the span
         start_payload = RunInputPayload(workflow_name=workflow_name, run_input=run_input)
-        uri = await self._capture_payload(
+        payload_id = await self._capture_payload(
             span_id=sid,
             span_kind="run",
             phase="start",
@@ -206,7 +203,7 @@ class RunTelemetryService:
         keys = list(run_input.keys())
         size_bytes = len(self._to_bytes_for_hash(self._dump(start_payload), payload_mime))
 
-        meta = {"refs": {"payload": uri}}
+        meta = {"payload_id": payload_id}
 
         await self.record(
             RunSpanStart(
@@ -247,14 +244,14 @@ class RunTelemetryService:
             output=output,
             error=error,
         )
-        uri = await self._capture_payload(
+        payload_id = await self._capture_payload(
             span_id=span_id,
             span_kind="run",
             phase="end",
             payload=self._dump(end_payload),
             mime=payload_mime,
         )
-        meta = {"refs": {"payload": uri}}
+        meta = {"payload_id": payload_id}
         if isinstance(output, dict):
             output_keys = list(output.keys())
         output_size_bytes = len(self._to_bytes_for_hash(self._dump(end_payload), payload_mime))
@@ -309,14 +306,14 @@ class RunTelemetryService:
             input_guardrails=input_guardrails,
             output_guardrails=output_guardrails,
         )
-        uri = await self._capture_payload(
+        payload_id = await self._capture_payload(
             span_id=sid,
             span_kind="agent",
             phase="start",
             payload=self._dump(start_payload),
             mime=payload_mime,
         )
-        meta = {"refs": {"payload": uri}}
+        meta = {"payload_id": payload_id}
 
         await self.record(
             AgentSpanStart(
@@ -417,7 +414,7 @@ class RunTelemetryService:
             # Emit diagnostics as flat annotations (warning/info)
             await self._emit_usage_diagnostics_annotations(name, inferred_agent_id, diag)
 
-        uri = await self._capture_payload(
+        payload_id = await self._capture_payload(
             span_id=span_id,
             span_kind="agent",
             phase="end",
@@ -435,7 +432,7 @@ class RunTelemetryService:
                 agent_id=inferred_agent_id,
                 duration_ms=duration,
                 status=status,
-                meta={"refs": {"payload": uri}},
+                meta={"payload_id": payload_id},
             )
         )
 
@@ -463,7 +460,7 @@ class RunTelemetryService:
             system_prompt=system_prompt,
             input_items=list(input_items or []),
         )
-        uri = await self._capture_payload(
+        payload_id = await self._capture_payload(
             span_id=sid,
             span_kind="llm",
             phase="start",
@@ -478,7 +475,7 @@ class RunTelemetryService:
                 agent=agent,
                 agent_id=agent_id,
                 model=model,
-                meta={"refs": {"payload": uri}},
+                meta={"payload_id": payload_id},
             )
         )
         return sid
@@ -535,7 +532,7 @@ class RunTelemetryService:
         end_payload = LlmEndPayload(agent=agent_name, response=response, error=error, usage=usage_obj)
         end_payload.usage = normalize_llm_usage(end_payload.usage)
 
-        uri = await self._capture_payload(
+        payload_id = await self._capture_payload(
             span_id=span_id,
             span_kind="llm",
             phase="end",
@@ -556,7 +553,7 @@ class RunTelemetryService:
                 model=model,
                 duration_ms=duration,
                 status=status,
-                meta={"refs": {"payload": uri}},
+                meta={"payload_id": payload_id},
             )
         )
 
@@ -575,7 +572,7 @@ class RunTelemetryService:
         await self._start_common(span_id=sid, name=tool, kind="tool")
 
         start_payload = ToolStartPayload(agent=agent, tool=tool, args=args)
-        uri = await self._capture_payload(
+        payload_id = await self._capture_payload(
             span_id=sid,
             span_kind="tool",
             phase="start",
@@ -590,7 +587,7 @@ class RunTelemetryService:
                 agent=agent,
                 agent_id=agent_id,
                 tool=tool,
-                meta={"refs": {"payload": uri}},
+                meta={"payload_id": payload_id},
             )
         )
         return sid
@@ -612,7 +609,7 @@ class RunTelemetryService:
 
         agent_name = agent or "unknown"
         end_payload = ToolEndPayload(agent=agent_name, tool=tool, result=tool_result, error=error)
-        uri = await self._capture_payload(
+        payload_id = await self._capture_payload(
             span_id=span_id,
             span_kind="tool",
             phase="end",
@@ -632,7 +629,7 @@ class RunTelemetryService:
                 tool=tool,
                 duration_ms=duration,
                 status=status,
-                meta={"refs": {"payload": uri}},
+                meta={"payload_id": payload_id},
             )
         )
 
@@ -652,10 +649,10 @@ class RunTelemetryService:
         await self._start_common(span_id=sid, name=name, kind="annotation")
         # payload contains full message/data
         payload = AnnotationPayload(level=level, message=message, data=data)
-        uri = await self._capture_payload(
+        payload_id = await self._capture_payload(
             span_id=sid, span_kind="annotation", phase="point", payload=self._dump(payload), mime=payload_mime
         )
-        meta = {"refs": {"payload": uri}}
+        meta = {"payload_id": payload_id}
         # span header carries only a safe, truncated preview
         msg = (message or "").strip()
         if preview_chars and preview_chars > 0 and len(msg) > preview_chars:
@@ -704,10 +701,10 @@ class RunTelemetryService:
             input_items=input_items,
             error=error,
         )
-        uri = await self._capture_payload(
+        payload_id = await self._capture_payload(
             span_id=sid, span_kind="guardrail", phase="point", payload=self._dump(payload), mime=payload_mime
         )
-        meta = {"refs": {"payload": uri}}
+        meta = {"payload_id": payload_id}
         await self.record(
             GuardrailSpanPoint(
                 span_id=sid,
@@ -758,10 +755,10 @@ class RunTelemetryService:
             agent_output=agent_output,
             error=error,
         )
-        uri = await self._capture_payload(
+        payload_id = await self._capture_payload(
             span_id=sid, span_kind="guardrail", phase="point", payload=self._dump(payload), mime=payload_mime
         )
-        meta = {"refs": {"payload": uri}}
+        meta = {"payload_id": payload_id}
         await self.record(
             GuardrailSpanPoint(
                 span_id=sid,
@@ -848,10 +845,10 @@ class RunTelemetryService:
             ),
             meta=(meta or {}),
         )
-        uri = await self._capture_payload(
+        payload_id = await self._capture_payload(
             span_id=sid, span_kind="handoff", phase="point", payload=self._dump(payload), mime=payload_mime
         )
-        meta_refs = {"refs": {"payload": uri}}
+        meta_refs = {"payload_id": payload_id}
         await self.record(
             HandoffSpanPoint(
                 span_id=sid,

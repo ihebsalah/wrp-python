@@ -59,7 +59,7 @@ def build_span_index(
                 "tripwire_triggered": None,
                 "from_agent": None,
                 "to_agent": None,
-                "payload_uri": None,
+                "payload_id": None,
             }
         return spans[sid]
 
@@ -74,11 +74,10 @@ def build_span_index(
 
         row = ensure(sid, kind, name, ts)
 
-        # pluck payload uri if provided by service meta
+        # pluck payload id if provided by service meta
         meta = getattr(ev, "meta", {}) or {}
-        refs = meta.get("refs") if isinstance(meta, dict) else None
-        if isinstance(refs, dict) and "payload" in refs:
-            row["payload_uri"] = refs["payload"]
+        if isinstance(meta, dict) and "payload_id" in meta:
+            row["payload_id"] = meta["payload_id"]
 
         # fill common header fields by event type
         if isinstance(ev, (AgentSpanStart, AgentSpanEnd)):

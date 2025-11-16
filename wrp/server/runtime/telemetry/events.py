@@ -174,4 +174,4 @@ class TelemetrySpanView(BaseModel):
     tripwire_triggered: bool | None = None
     from_agent: str | None = None
     to_agent: str | None = None
-    payload_uri: str | None = None
+    payload_id: str | None = None

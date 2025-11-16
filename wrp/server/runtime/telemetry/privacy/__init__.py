@@ -2,7 +2,7 @@
 # Re-export the privacy API surface so authors can do:
 from .policy import TelemetryResourcePolicy, RedactRules, Visibility, vis
 from .redaction import sanitize_envelope_dict
-from .guards import is_private_only_span_payload_uri
+from .guards import is_private_only_span_payload
 from . import presets
 
 __all__ = [

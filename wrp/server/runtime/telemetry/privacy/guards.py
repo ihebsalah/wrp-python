@@ -1,16 +1,10 @@
 # wrp/server/runtime/telemetry/privacy/guards.py
 from __future__ import annotations
 
-import re
 from typing import Iterable, Optional
 
 from .policy import TelemetryResourcePolicy
 from wrp.server.runtime.store.base import Store
-
-# Pre-compiled regex for matching span payload URIs.
-PAYLOAD_URI_RE = re.compile(
-    r"^resource://system_sessions/(?P<system_session_id>[^/]+)/runs/(?P<run_id>[^/]+)/telemetry/spans/(?P<span_id>[^/]+)/payload$"
-)
 
 
 def _span_kind_for(
@@ -28,25 +22,19 @@ def _span_kind_for(
     return None
 
 
-async def is_private_only_span_payload_uri(
-    uri: str,
+async def is_private_only_span_payload(
+    system_session_id: str,
+    run_id: str,
+    span_id: str,
     policy: TelemetryResourcePolicy,
     store: Store,
 ) -> bool:
     """
-    Returns True iff `uri` targets a span payload AND, under the current `policy`,
-    *both* parts (start & end) would be private.
+    Returns True iff, under the current `policy`, *all* payload kinds for this span
+    (start/end or point) would be private.
 
-    If the URI is not a span payload, returns False.
     If we cannot determine span kind, returns True (fail-closed).
     """
-    m = PAYLOAD_URI_RE.match(uri)
-    if not m:
-        return False
-
-    system_session_id = m.group("system_session_id"); run_id = m.group("run_id")
-    span_id = m.group("span_id")
-
     # Find span_kind from telemetry (best-effort).
     try:
         events = await store.load_telemetry(system_session_id, run_id, kinds={"span"})
@@ -66,7 +54,7 @@ async def is_private_only_span_payload_uri(
         # Still unknown -> fail-closed
         return True
 
-    # Map span kind to payload kinds this resource may expose.
+    # Map span kind to payload kinds this span may expose.
     if span_kind in ("run", "agent", "llm", "tool"):
         candidate_kinds = (f"{span_kind}.start", f"{span_kind}.end")
     elif span_kind in ("guardrail", "annotation", "handoff"):
