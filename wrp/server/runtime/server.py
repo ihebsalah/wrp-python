@@ -867,7 +867,7 @@ class WRP(Generic[LifespanResultT]):
         """
         self._provider_settings_registry.register(name, default, allow_override=allow_override)
 
-    def get_provider_settings(self, name: str) -> ProviderSettings | None:
+    def get_provider_settings(self, name: str) -> Any:
         """
         Return a deep copy of the effective ProviderSettings for the given provider.
         """
@@ -889,7 +889,7 @@ class WRP(Generic[LifespanResultT]):
         """
         self._agent_settings_registry.register(name, default, allow_override=allow_override)
 
-    def get_agent_settings(self, name: str) -> AgentSettings | None:
+    def get_agent_settings(self, name: str) -> Any:
         """
         Return a deep copy of the effective AgentSettings for the given agent.
         """
@@ -1617,7 +1617,7 @@ class Context(BaseModel, Generic[ServerSessionT, LifespanContextT, RequestT]):
         # Hand workflows a deep copy so in-process mutations don't persist.
         return cfg.model_copy(deep=True)
 
-    def get_provider_settings(self, name: str) -> ProviderSettings:
+    def get_provider_settings(self, name: str) -> Any:
         """
         Return the effective ProviderSettings for the given provider name.
         If missing, logs a warning and returns an empty placeholder instance.
@@ -1629,7 +1629,7 @@ class Context(BaseModel, Generic[ServerSessionT, LifespanContextT, RequestT]):
             return ProviderSettings.model_construct()
         return cfg
 
-    def get_agent_settings(self, name: str) -> AgentSettings:
+    def get_agent_settings(self, name: str) -> Any:
         """
         Return the effective AgentSettings for the given agent name.
         If missing, logs a warning and returns an empty placeholder instance.
