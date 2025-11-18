@@ -1,18 +1,14 @@
 # examples/ai_engineer_server.py
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 # --- Pydantic ---
 from pydantic import BaseModel, Field
 
 # --- OpenAI Agent SDK ---
-from agents import (
-    Agent,
-    ModelSettings,
-    Runner,
-    TResponseInputItem
-)
+from agents import Agent, ModelSettings, Runner, TResponseInputItem
+from openai.types.shared.reasoning import Reasoning
 
 # --- WRP imports ---
 from wrp.server.runtime.settings.agents.settings import AgentSettings
@@ -44,29 +40,6 @@ class TestAgentSchema(BaseModel):
 
 
 # ---------------------------
-# Workflow-level settings (defaults)
-# ---------------------------
-class DevWorkflowSettings(WorkflowSettings):
-    """
-    Workflow-level knobs for the dev workflow.
-
-    Intentionally kept free of model settings; those live in AgentSettings now.
-    """
-
-    pass
-
-
-class TestWorkflowSettings(WorkflowSettings):
-    """
-    Workflow-level knobs for the test workflow.
-
-    Demonstrates behavior-level control that sits above the raw workflow input.
-    """
-
-    allow_code_repair: bool = True
-
-
-# ---------------------------
 # Agent settings
 # ---------------------------
 class DevAgentSettings(AgentSettings):
@@ -77,6 +50,8 @@ class DevAgentSettings(AgentSettings):
     max_tokens: int = 2048
     parallel_tool_calls: bool = True
     store: bool = True
+    # optional reasoning knob
+    reasoning_effort: Literal["low", "medium", "high"] | None = None
     # locked by base; author-defined defaults
     allowed_providers: list[str] | None = ["openai"]
     allowed_models: dict[str, list[str]] | None = {
@@ -92,6 +67,8 @@ class TestAgentSettings(AgentSettings):
     max_tokens: int = 1600
     parallel_tool_calls: bool = True
     store: bool = True
+    # optional reasoning knob
+    reasoning_effort: Literal["low", "medium", "high"] | None = None
     allowed_providers: list[str] | None = ["openai"]
     allowed_models: dict[str, list[str]] | None = {
         "openai": ["gpt-4.1-mini", "gpt-4.1"],
@@ -99,6 +76,12 @@ class TestAgentSettings(AgentSettings):
 
 
 def build_dev_agent(agent_cfg: DevAgentSettings) -> Agent:
+    reasoning = (
+        Reasoning(effort=agent_cfg.reasoning_effort)
+        if agent_cfg.reasoning_effort is not None
+        else None
+    )
+
     return Agent(
         name="Dev Agent",
         instructions=(
@@ -115,11 +98,18 @@ def build_dev_agent(agent_cfg: DevAgentSettings) -> Agent:
             max_tokens=agent_cfg.max_tokens,
             parallel_tool_calls=agent_cfg.parallel_tool_calls,
             store=agent_cfg.store,
+            reasoning=reasoning,
         ),
     )
 
 
 def build_test_agent(agent_cfg: TestAgentSettings) -> Agent:
+    reasoning = (
+        Reasoning(effort=agent_cfg.reasoning_effort)
+        if agent_cfg.reasoning_effort is not None
+        else None
+    )
+
     return Agent(
         name="Test Agent",
         instructions=(
@@ -136,37 +126,9 @@ def build_test_agent(agent_cfg: TestAgentSettings) -> Agent:
             max_tokens=agent_cfg.max_tokens,
             parallel_tool_calls=agent_cfg.parallel_tool_calls,
             store=agent_cfg.store,
+            reasoning=reasoning,
         ),
     )
-
-
-# ---------------------------
-# Workflow I/O models
-# ---------------------------
-
-
-class DevIn(WorkflowInput):
-    prompt: str = Field(..., description="Development prompt / ticket text")
-
-
-class DevOut(WorkflowOutput):
-    developer_report: str
-
-
-class TestIn(WorkflowInput):
-    prompt: str = Field(..., description="Testing prompt")
-    test_input: str = Field(
-        ..., description="Subject under test (code path, snippet, API contract, etc.)"
-    )
-    repair_code: bool = Field(
-        default=False,
-        description="If true, reuse Dev Agent to apply a fix and return a repair report",
-    )
-
-
-class TestOut(WorkflowOutput):
-    test_report: str
-    repair_report: Optional[str] = None  # report of changes made by dev agent (no code)
 
 
 # ---------------------------
@@ -206,6 +168,62 @@ server.register_agent_settings("test-agent", TestAgentSettings(), allow_override
 # Workflows
 # ---------------------------
 
+# ---------------------------
+# Workflow I/O models
+# ---------------------------
+
+
+class DevIn(WorkflowInput):
+    prompt: str = Field(..., description="Development prompt / ticket text")
+
+
+class DevOut(WorkflowOutput):
+    developer_report: str
+
+
+class TestIn(WorkflowInput):
+    prompt: str = Field(..., description="Testing prompt")
+    test_input: str = Field(
+        ..., description="Subject under test (code path, snippet, API contract, etc.)"
+    )
+    repair_code: bool = Field(
+        default=False,
+        description="If true, reuse Dev Agent to apply a fix and return a repair report",
+    )
+
+
+class TestOut(WorkflowOutput):
+    test_report: str
+    repair_report: Optional[str] = None  # report of changes made by dev agent (no code)
+
+
+# ---------------------------
+# Workflow-level settings (defaults)
+# ---------------------------
+class DevWorkflowSettings(WorkflowSettings):
+    """
+    Workflow-level knobs for the dev workflow.
+
+    Intentionally kept free of model settings; those live in AgentSettings now.
+    """
+
+    pass
+
+
+class TestWorkflowSettings(WorkflowSettings):
+    """
+    Workflow-level knobs for the test workflow.
+
+    Demonstrates behavior-level control that sits above the raw workflow input.
+    """
+
+    allow_code_repair: bool = True
+
+
+# ---------------------------
+# Workflow definitions
+# ---------------------------
+
 
 @server.workflow(
     name="dev",
@@ -221,7 +239,9 @@ server.register_agent_settings("test-agent", TestAgentSettings(), allow_override
 async def dev_flow(wf_input: DevIn, ctx: Context) -> DevOut:
     # Use only the 'dev' channel (seed + live).
     ch = await ctx.run.conversations.get_channel(
-        "dev", "Development", "Primary channel for development work",
+        "dev",
+        "Development",
+        "Primary channel for development work",
         item_type=TResponseInputItem,
     )
     # Effective workflow settings (no name needed; inferred from current workflow)
@@ -239,12 +259,7 @@ async def dev_flow(wf_input: DevIn, ctx: Context) -> DevOut:
     user_msg: list[TResponseInputItem] = [
         {
             "role": "user",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": wf_input.prompt
-                }
-            ],
+            "content": [{"type": "input_text", "text": wf_input.prompt}],
         }
     ]
     await ch.add_item(user_msg)
@@ -289,7 +304,9 @@ async def dev_flow(wf_input: DevIn, ctx: Context) -> DevOut:
 async def test_flow(wf_input: TestIn, ctx: Context) -> TestOut:
     # Primary channel for Test Agent uses only 'test' (seed + live).
     test_ch = await ctx.run.conversations.get_channel(
-        "test", "Testing", "Primary channel for test design & results",
+        "test",
+        "Testing",
+        "Primary channel for test design & results",
         item_type=TResponseInputItem,
     )
     test_cfg = ctx.get_workflow_settings()  # -> TestWorkflowSettings instance
@@ -354,7 +371,9 @@ async def test_flow(wf_input: TestIn, ctx: Context) -> TestOut:
     if repair_requested and repair_enabled:
         # Reuse dev agent with 'dev' channel (seed + live).
         dev_ch = await ctx.run.conversations.get_channel(
-            "dev", "Development", "Primary channel for development work",
+            "dev",
+            "Development",
+            "Primary channel for development work",
             item_type=TResponseInputItem,
         )
         dev_agent_cfg = ctx.get_agent_settings("dev-agent")
@@ -370,12 +389,7 @@ async def test_flow(wf_input: TestIn, ctx: Context) -> TestOut:
         repair_user_msg: list[TResponseInputItem] = [
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": repair_prompt
-                    }
-                ]
+                "content": [{"type": "input_text", "text": repair_prompt}],
             }
         ]
         await dev_ch.add_item(repair_user_msg)
