@@ -1,9 +1,10 @@
 # wrp/server/runtime/settings/providers/settings.py
 from __future__ import annotations
 
+import os
 from typing import ClassVar
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr
+from pydantic import BaseModel, ConfigDict, PrivateAttr, SecretStr
 
 
 class ProviderSettings(BaseModel):
@@ -29,3 +30,26 @@ class ProviderSettings(BaseModel):
         The registry keeps this flag in sync when overrides are applied.
         """
         return bool(self._override_status)
+
+    def on_provider_set(self, provider_name: str) -> None:
+        """
+        Hook called when these settings are hydrated (loaded) or updated.
+
+        Default behavior:
+        Automatically sets environment variables for every field in the settings.
+        Format: {PROVIDER_NAME}_{FIELD_NAME} (uppercased).
+
+        Example:
+            provider="openai", api_key="sk-..." -> OPENAI_API_KEY="sk-..."
+
+        Authors can override this method in subclasses to customize env var mapping.
+        """
+        prefix = provider_name.upper().replace("-", "_")
+        for key, value in self.model_dump().items():
+            if value is None:
+                continue
+
+            env_key = f"{prefix}_{key.upper()}"
+            # Reveal secret values for the environment
+            env_val = value.get_secret_value() if isinstance(value, SecretStr) else str(value)
+            os.environ[env_key] = env_val

@@ -45,13 +45,17 @@ class TestAgentSchema(BaseModel):
 class DevAgentSettings(AgentSettings):
     provider_name: str = "openai"
     model: str = "gpt-4.1-mini"
-    temperature: float = 0.3
-    top_p: float = 1.0
-    max_tokens: int = 2048
+    temperature: float = Field(
+        default=0.3, ge=0.0, le=2.0, description="Creativity knob. 0=deterministic, 2=random."
+    )
+    top_p: float = Field(default=1.0, ge=0.0, le=1.0)
+    max_tokens: int = Field(default=2048, gt=0, description="Max output tokens.")
     parallel_tool_calls: bool = True
-    store: bool = True
     # optional reasoning knob
-    reasoning_effort: Literal["low", "medium", "high"] | None = None
+    reasoning_effort: Literal["low", "medium", "high"] | None = Field(
+        default=None,
+        description="Effort level for reasoning models.",
+    )
     # locked by base; author-defined defaults
     allowed_providers: list[str] | None = ["openai"]
     allowed_models: dict[str, list[str]] | None = {
@@ -62,11 +66,10 @@ class DevAgentSettings(AgentSettings):
 class TestAgentSettings(AgentSettings):
     provider_name: str = "openai"
     model: str = "gpt-4.1-mini"
-    temperature: float = 0.3
-    top_p: float = 1.0
-    max_tokens: int = 1600
+    temperature: float = Field(default=0.3, ge=0.0, le=2.0)
+    top_p: float = Field(default=1.0, ge=0.0, le=1.0)
+    max_tokens: int = Field(default=1600, gt=0)
     parallel_tool_calls: bool = True
-    store: bool = True
     # optional reasoning knob
     reasoning_effort: Literal["low", "medium", "high"] | None = None
     allowed_providers: list[str] | None = ["openai"]
@@ -76,12 +79,6 @@ class TestAgentSettings(AgentSettings):
 
 
 def build_dev_agent(agent_cfg: DevAgentSettings) -> Agent:
-    reasoning = (
-        Reasoning(effort=agent_cfg.reasoning_effort)
-        if agent_cfg.reasoning_effort is not None
-        else None
-    )
-
     return Agent(
         name="Dev Agent",
         instructions=(
@@ -97,19 +94,12 @@ def build_dev_agent(agent_cfg: DevAgentSettings) -> Agent:
             top_p=agent_cfg.top_p,
             max_tokens=agent_cfg.max_tokens,
             parallel_tool_calls=agent_cfg.parallel_tool_calls,
-            store=agent_cfg.store,
-            reasoning=reasoning,
+            reasoning=Reasoning(effort=agent_cfg.reasoning_effort) if agent_cfg.reasoning_effort is not None else None,
         ),
     )
 
 
 def build_test_agent(agent_cfg: TestAgentSettings) -> Agent:
-    reasoning = (
-        Reasoning(effort=agent_cfg.reasoning_effort)
-        if agent_cfg.reasoning_effort is not None
-        else None
-    )
-
     return Agent(
         name="Test Agent",
         instructions=(
@@ -125,8 +115,7 @@ def build_test_agent(agent_cfg: TestAgentSettings) -> Agent:
             top_p=agent_cfg.top_p,
             max_tokens=agent_cfg.max_tokens,
             parallel_tool_calls=agent_cfg.parallel_tool_calls,
-            store=agent_cfg.store,
-            reasoning=reasoning,
+            reasoning=Reasoning(effort=agent_cfg.reasoning_effort) if agent_cfg.reasoning_effort is not None else None,
         ),
     )
 

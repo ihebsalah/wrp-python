@@ -1643,4 +1643,14 @@ class Context(BaseModel, Generic[ServerSessionT, LifespanContextT, RequestT]):
         provider = getattr(cfg, "provider_name", None)
         if provider and self.wrp.get_provider_settings(provider) is None:
             logger.warning("Provider settings missing for '%s' (from agent '%s')", provider, name)
-        return cfg
+
+        # Auto-Merge: Inject the provider settings object into the agent settings
+        # We create a copy to ensure we don't mutate the cached registry version
+        effective_cfg = cfg.model_copy(deep=True)
+
+        if provider:
+            # get_provider_settings handles masking/defaults internally
+            p_cfg = self.wrp.get_provider_settings(provider)
+            effective_cfg.provider = p_cfg
+
+        return effective_cfg

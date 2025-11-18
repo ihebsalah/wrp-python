@@ -136,6 +136,9 @@ class ProviderSettingsRegistry:
             except Exception:
                 logger.exception("Failed to persist provider settings for '%s'", name)
 
+        # Auto-sync to environment variables
+        inst.on_provider_set(name)
+
         return inst
 
     async def load_persisted_if_needed(self, name: str) -> None:
@@ -199,6 +202,16 @@ class ProviderSettingsRegistry:
                 self._settings_overridden[name] = bool(overridden)
             except Exception:
                 logger.exception("Persisted provider settings invalid for '%s'; ignoring", name)
+
+        # After loading from store (or falling back to defaults), ensure ENV VARS are set for ALL registered providers
+        for name in self._defaults:
+            # Get the effective settings (overridden or default)
+            inst = self.get(name)
+            if inst:
+                try:
+                    inst.on_provider_set(name)
+                except Exception:
+                    logger.exception("Failed to set environment variables for provider '%s'", name)
 
     # ---- schema & masking helpers ----------------------------------------
 

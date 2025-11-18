@@ -1,9 +1,9 @@
 # wrp/server/runtime/settings/agents/settings.py
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 
 class AgentSettings(BaseModel):
@@ -26,6 +26,10 @@ class AgentSettings(BaseModel):
     allowed_providers: list[str] | None = None
     allowed_models: dict[str, list[str]] | None = None
 
+    # Runtime-injected provider settings (Auto-Merge).
+    # Excluded from serialization so it is never persisted with the agent.
+    provider: Any | None = Field(default=None, exclude=True)
+
     model_config = ConfigDict(extra="allow")
 
     _override_status: bool = PrivateAttr(default=False)
@@ -34,3 +38,27 @@ class AgentSettings(BaseModel):
 
     def settings_overridden(self) -> bool:
         return bool(self._override_status)
+
+    @model_validator(mode="after")
+    def validate_allowlists(self) -> AgentSettings:
+        """
+        Enforce allowed_providers and allowed_models constraints if they are defined.
+        """
+        # 1. Check Provider
+        if self.allowed_providers is not None:
+            if self.provider_name not in self.allowed_providers:
+                raise ValueError(
+                    f"Provider '{self.provider_name}' is not allowed. "
+                    f"Allowed: {self.allowed_providers}"
+                )
+
+        # 2. Check Model (if an allowlist exists for this provider)
+        if self.allowed_models is not None:
+            valid_models = self.allowed_models.get(self.provider_name)
+            if valid_models is not None and self.model not in valid_models:
+                raise ValueError(
+                    f"Model '{self.model}' is not allowed for provider '{self.provider_name}'. "
+                    f"Allowed models: {valid_models}"
+                )
+
+        return self
