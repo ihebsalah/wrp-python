@@ -1617,16 +1617,30 @@ class Context(BaseModel, Generic[ServerSessionT, LifespanContextT, RequestT]):
         # Hand workflows a deep copy so in-process mutations don't persist.
         return cfg.model_copy(deep=True)
 
-    def get_provider_settings(self, name: str) -> ProviderSettings | None:
+    def get_provider_settings(self, name: str) -> ProviderSettings:
         """
         Return the effective ProviderSettings for the given provider name.
+        If missing, logs a warning and returns an empty placeholder instance.
         """
         cfg = self.wrp.get_provider_settings(name)
+        if cfg is None:
+            logger.warning("Provider settings missing for '%s'; using empty defaults", name)
+            # Avoid validation requirements; build a blank model with defaults.
+            return ProviderSettings.model_construct()
         return cfg
 
-    def get_agent_settings(self, name: str) -> AgentSettings | None:
+    def get_agent_settings(self, name: str) -> AgentSettings:
         """
         Return the effective AgentSettings for the given agent name.
+        If missing, logs a warning and returns an empty placeholder instance.
+        Also warns if the referenced provider is missing.
         """
         cfg = self.wrp.get_agent_settings(name)
+        if cfg is None:
+            logger.warning("Agent settings missing for '%s'; using empty defaults", name)
+            return AgentSettings.model_construct()
+
+        provider = getattr(cfg, "provider_name", None)
+        if provider and self.wrp.get_provider_settings(provider) is None:
+            logger.warning("Provider settings missing for '%s' (from agent '%s')", provider, name)
         return cfg

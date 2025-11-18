@@ -227,13 +227,6 @@ async def dev_flow(wf_input: DevIn, ctx: Context) -> DevOut:
     # Effective workflow settings (no name needed; inferred from current workflow)
     dev_cfg = ctx.get_workflow_settings()  # -> DevWorkflowSettings instance
     dev_agent_cfg = ctx.get_agent_settings("dev-agent")
-    if dev_agent_cfg is None:
-        raise RuntimeError("Missing agent settings for 'dev-agent'")
-    dev_provider_cfg = ctx.get_provider_settings(dev_agent_cfg.provider_name)
-    if dev_provider_cfg is None:
-        raise RuntimeError(
-            f"Missing provider settings for '{dev_agent_cfg.provider_name}'"
-        )
 
     # Example: warn if any override has been applied (instance helper infers workflow via ctx)
     if dev_cfg.settings_overridden(ctx=ctx):
@@ -301,13 +294,6 @@ async def test_flow(wf_input: TestIn, ctx: Context) -> TestOut:
     )
     test_cfg = ctx.get_workflow_settings()  # -> TestWorkflowSettings instance
     test_agent_cfg = ctx.get_agent_settings("test-agent")
-    if test_agent_cfg is None:
-        raise RuntimeError("Missing agent settings for 'test-agent'")
-    test_provider_cfg = ctx.get_provider_settings(test_agent_cfg.provider_name)
-    if test_provider_cfg is None:
-        raise RuntimeError(
-            f"Missing provider settings for '{test_agent_cfg.provider_name}'"
-        )
 
     # Alternative override detection via manager flag (canonical, cheap):
     if ctx.wrp._workflow_manager.settings_overridden(ctx.run.workflow_name):
@@ -372,13 +358,6 @@ async def test_flow(wf_input: TestIn, ctx: Context) -> TestOut:
             item_type=TResponseInputItem,
         )
         dev_agent_cfg = ctx.get_agent_settings("dev-agent")
-        if dev_agent_cfg is None:
-            raise RuntimeError("Missing agent settings for 'dev-agent'")
-        dev_provider_cfg = ctx.get_provider_settings(dev_agent_cfg.provider_name)
-        if dev_provider_cfg is None:
-            raise RuntimeError(
-                f"Missing provider settings for '{dev_agent_cfg.provider_name}'"
-            )
         dev_agent = build_dev_agent(dev_agent_cfg)
 
         repair_prompt = (
