@@ -8,6 +8,9 @@ from mcp.server.fastmcp.utilities.logging import get_logger
 
 from wrp.server.runtime.store.base import Store
 from .settings import ProviderSettings
+from .builtin import (
+    OpenAIProviderSettings, AnthropicProviderSettings, GoogleProviderSettings, LiteLLMProviderSettings
+)
 
 logger = get_logger(__name__)
 
@@ -28,13 +31,44 @@ class ProviderSettingsRegistry:
         self._settings_overridden: dict[str, bool] = {}
         self._allow_override: dict[str, bool] = {}
         self._store = store
+        # Names reserved for builtins; authors cannot register these.
+        self._reserved: set[str] = set()
+
+        # Auto-register builtin providers here (NOT in server.py).
+        # End-users will override values (api keys, etc.) via the settings API.
+        self.register_builtin("openai", OpenAIProviderSettings())
+        self.register_builtin("anthropic", AnthropicProviderSettings())
+        self.register_builtin("google", GoogleProviderSettings())
+        self.register_builtin("litellm", LiteLLMProviderSettings())
 
     # ---- registration -----------------------------------------------------
 
+    def register_builtin(self, name: str, default: ProviderSettings) -> None:
+        """
+        Internal use: register a predefined provider and reserve the name.
+        """
+        if name in self._defaults:
+            logger.warning("Builtin provider '%s' already registered; keeping existing default", name)
+            self._reserved.add(name)
+            return
+        self._reserved.add(name)
+        self._register_internal(name, default, allow_override=True)
+
     def register(self, name: str, default: ProviderSettings, *, allow_override: bool = True) -> None:
+        """
+        Register a custom provider with its default settings.
+        """
+        if name in self._reserved:
+            raise ValueError(f"Provider '{name}' is predefined; do not register it.")
         if name in self._defaults:
             logger.warning("Provider settings already registered for '%s'; keeping existing default", name)
             return
+        self._register_internal(name, default, allow_override)
+
+    def _register_internal(self, name: str, default: ProviderSettings, allow_override: bool) -> None:
+        """
+        Core logic for adding a provider's settings to the registry.
+        """
         base = default.model_copy(deep=True)
         base._override_status = False
         self._defaults[name] = base

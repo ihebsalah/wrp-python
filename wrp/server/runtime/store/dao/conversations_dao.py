@@ -69,11 +69,12 @@ class ConversationsDAO:
         last_ts: str | None,
         name: str | None = None,
         description: str | None = None,
+        item_type: str | None = None,
     ) -> None:
-        placeholders = self.e.placeholders(7)
-        # Use ON CONFLICT for engines that support it; Engine abstracts param styles
+        # Use ON CONFLICT for engines that support it; Engine abstracts param styles.
+        placeholders = self.e.placeholders(8)
         sql = f"""
-        INSERT INTO conversation_channels(system_session_id, run_id, channel, name, description, items_count, last_ts)
+        INSERT INTO conversation_channels(system_session_id, run_id, channel, name, description, items_count, last_ts, item_type)
         VALUES {placeholders}
         ON CONFLICT (system_session_id, run_id, channel)
         DO UPDATE SET
@@ -82,14 +83,17 @@ class ConversationsDAO:
                       WHEN conversation_channels.last_ts IS NULL THEN EXCLUDED.last_ts
                       WHEN EXCLUDED.last_ts IS NULL THEN conversation_channels.last_ts
                       ELSE (CASE WHEN conversation_channels.last_ts >= EXCLUDED.last_ts THEN conversation_channels.last_ts ELSE EXCLUDED.last_ts END)
-                    END;
+                    END,
+          item_type = COALESCE(conversation_channels.item_type, EXCLUDED.item_type)
+          -- NOTE: name/description still not overwritten on bump (first writer wins).
+        ;
         """
-        self.e.execute(sql, (system_session_id, run_id, channel, name, description, add_count, last_ts))
+        self.e.execute(sql, (system_session_id, run_id, channel, name, description, add_count, last_ts, item_type))
 
     def list_channels_meta(self, system_session_id: str, run_id: str) -> list[dict]:
         return self.e.query_all(
             """
-            SELECT channel, name, description, items_count, last_ts
+            SELECT channel, name, description, items_count, last_ts, item_type
               FROM conversation_channels
              WHERE system_session_id=%s AND run_id=%s
              ORDER BY channel ASC;

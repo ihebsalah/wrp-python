@@ -96,6 +96,7 @@ class Store(ABC):
         channel: str,
         name: str | None = None,
         description: str | None = None,
+        item_type: str | None = None,
     ) -> None: ...
 
     @abstractmethod

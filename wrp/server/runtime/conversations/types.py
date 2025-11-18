@@ -26,12 +26,15 @@ class ChannelMeta(BaseModel):
     - id: persistent channel identifier (used in storage; previously `channel`)
     - name: human-friendly display name
     - description: optional description
+    - itemType: persisted item type token (declared by author; for discovery/introspection)
     """
     id: str
     name: str | None = None
     description: str | None = None
     itemsCount: int | None = None
     lastItemTs: datetime | None = None
+    # Persisted item type token (declared by the author; for discovery/introspection).
+    itemType: str | None = None
 
 class ChannelView(BaseModel):
     """

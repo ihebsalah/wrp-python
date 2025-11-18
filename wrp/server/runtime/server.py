@@ -1603,7 +1603,7 @@ class Context(BaseModel, Generic[ServerSessionT, LifespanContextT, RequestT]):
         await self.log("error", message, **extra)
 
     # ---- Workflow settings convenience ----
-    def get_workflow_settings(self, name: str | None = None) -> WorkflowSettings | None:
+    def get_workflow_settings(self, name: str | None = None) -> WorkflowSettings:
         """
         Return the effective non-run WorkflowSettings instance for the given workflow name.
         If name is omitted, uses the current run's workflow.
@@ -1612,8 +1612,10 @@ class Context(BaseModel, Generic[ServerSessionT, LifespanContextT, RequestT]):
         if not wf_name:
             raise ValueError("No workflow is active, and no workflow name was provided")
         cfg = self.wrp._workflow_manager.get_settings(wf_name)
+        if cfg is None:
+            raise RuntimeError(f"Workflow '{wf_name}' does not declare settings")
         # Hand workflows a deep copy so in-process mutations don't persist.
-        return cfg.model_copy(deep=True) if cfg is not None else None
+        return cfg.model_copy(deep=True)
 
     def get_provider_settings(self, name: str) -> ProviderSettings | None:
         """

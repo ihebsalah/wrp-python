@@ -1,7 +1,7 @@
 # wrp/server/runtime/settings/workflows/settings.py
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
@@ -19,6 +19,13 @@ class WorkflowSettings(BaseModel):
 
     # Field-level locks (declare in subclasses: e.g., `locked = {"model"}`)
     locked: ClassVar[set[str]] = set()
+
+    def __getattr__(self, name: str) -> Any:
+        """
+        Allow workflow authors to define arbitrary settings fields without
+        triggering static type-analysis errors while still failing fast at runtime.
+        """
+        raise AttributeError(f"{self.__class__.__name__!s} has no attribute {name!r}")
 
     def settings_overridden(
         self,

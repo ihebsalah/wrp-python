@@ -24,7 +24,7 @@ class InMemoryStore(Store):
         self._conv: dict[tuple[str, str], list[ChannelItem]] = {}  # (system_session_id, run_id)
         # per-session counter for human-friendly run ids (001..999)
         self._counter: dict[str, int] = {}  # system_session_id -> last int
-        # per-run channel meta
+        # per-run channel meta (now includes item_type)
         self._conv_meta: dict[tuple[str, str], dict[str, dict]] = defaultdict(dict)
         # telemetry bucket
         self._telemetry: dict[tuple[str, str], list[TelemetryEvent]] = {}  # (system_session_id, run_id)
@@ -161,13 +161,14 @@ class InMemoryStore(Store):
             bump = Counter(i.channel for i in items)
             for ch, n in bump.items():
                 ch_meta = self._conv_meta[key].setdefault(
-                    ch, {"items_count": 0, "last_ts": None, "name": None, "description": None}
+                    ch, {"items_count": 0, "last_ts": None, "name": None, "description": None, "item_type": None}
                 )
                 ch_meta["items_count"] += n
                 last_ts = max(i.ts for i in items if i.channel == ch)
                 ch_meta["last_ts"] = (
                     last_ts if (ch_meta["last_ts"] is None or last_ts > ch_meta["last_ts"]) else ch_meta["last_ts"]
                 )
+        # NOTE: do not touch item_type here
 
     async def list_channel_meta(self, system_session_id: str, run_id: str) -> List[ChannelMeta]:
         key = (system_session_id, run_id)
@@ -180,6 +181,7 @@ class InMemoryStore(Store):
                     description=d.get("description"),
                     itemsCount=int(d.get("items_count", 0)),
                     lastItemTs=d.get("last_ts"),
+                    itemType=d.get("item_type"),
                 )
             )
         return out
@@ -191,6 +193,7 @@ class InMemoryStore(Store):
         channel: str,
         name: str | None = None,
         description: str | None = None,
+        item_type: str | None = None,
     ) -> None:
         """Ensures that a metadata entry for a channel exists."""
         key = (system_session_id, run_id)
@@ -201,7 +204,17 @@ class InMemoryStore(Store):
                 "last_ts": None,
                 "name": name,
                 "description": description,
+                "item_type": item_type,
             }
+        else:
+            # Only set name/description if provided.
+            if name is not None:
+                bucket[channel]["name"] = name
+            if description is not None:
+                bucket[channel]["description"] = description
+            # one-time backfill: set item_type if currently missing
+            if item_type is not None and bucket[channel].get("item_type") is None:
+                bucket[channel]["item_type"] = item_type
 
     async def load_channel_items(
         self, system_session_id: str, run_id: str, *, channel: str, limit: int | None = None

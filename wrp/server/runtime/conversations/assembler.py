@@ -83,7 +83,9 @@ async def _load_tail(
         metas = await store.list_channel_meta(system_session_id, run_id)
         channels = {m.id for m in metas}
     per_ch: List[ChannelItem] = []
-    for ch in channels:
+    # Iterate through channels in a stable order to ensure deterministic
+    # ordering of items that have the exact same timestamp.
+    for ch in sorted(channels):
         ch_tail = await store.load_channel_items(system_session_id, run_id, channel=ch, limit=limit)
         per_ch.extend(ch_tail)
     per_ch.sort(key=lambda i: i.ts)

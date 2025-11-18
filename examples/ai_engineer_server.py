@@ -1,17 +1,17 @@
 # examples/ai_engineer_server.py
 from __future__ import annotations
 
-import os
 from typing import Optional
 
 # --- Pydantic ---
-from pydantic import AnyHttpUrl, BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field
 
 # --- OpenAI Agent SDK ---
 from agents import (
     Agent,
     ModelSettings,
     Runner,
+    TResponseInputItem
 )
 
 # --- WRP imports ---
@@ -67,84 +67,38 @@ class TestWorkflowSettings(WorkflowSettings):
 
 
 # ---------------------------
-# Provider / Agent settings
+# Agent settings
 # ---------------------------
-
-
-class OpenAIProviderSettings(ProviderSettings):
-    api_key: SecretStr | None = Field(
-        default=None,
-        description="OpenAI API key used by agents that reference the 'openai' provider",
-    )
-    base_url: AnyHttpUrl = Field(
-        "https://api.openai.com/v1", description="Base URL for OpenAI API requests"
-    )
-    organization: Optional[str] = Field(
-        default=None, description="Optional OpenAI organization identifier"
-    )
-
-    # Prevent clients from switching the underlying provider host
-    locked = {"base_url"}
-
-
 class DevAgentSettings(AgentSettings):
-    provider_name: str = Field(
-        "openai", description="Provider key used to look up OpenAIProviderSettings"
-    )
+    provider_name: str = "openai"
     model: str = "gpt-4.1-mini"
     temperature: float = 0.3
     top_p: float = 1.0
     max_tokens: int = 2048
     parallel_tool_calls: bool = True
     store: bool = True
-    # simple “allowed list” that explicitly includes the provider
-    allowed_providers: list[str] = ["openai"]
+    # locked by base; author-defined defaults
+    allowed_providers: list[str] | None = ["openai"]
+    allowed_models: dict[str, list[str]] | None = {
+        "openai": ["gpt-4.1-mini", "gpt-4.1"],
+    }
 
 
 class TestAgentSettings(AgentSettings):
-    provider_name: str = Field(
-        "openai", description="Provider key used to look up OpenAIProviderSettings"
-    )
+    provider_name: str = "openai"
     model: str = "gpt-4.1-mini"
     temperature: float = 0.3
     top_p: float = 1.0
     max_tokens: int = 1600
     parallel_tool_calls: bool = True
     store: bool = True
-    allowed_providers: list[str] = ["openai"]
+    allowed_providers: list[str] | None = ["openai"]
+    allowed_models: dict[str, list[str]] | None = {
+        "openai": ["gpt-4.1-mini", "gpt-4.1"],
+    }
 
 
-def _ensure_provider_allowed(agent_cfg: AgentSettings) -> None:
-    allowed = getattr(agent_cfg, "allowed_providers", None)
-    if allowed and agent_cfg.provider_name not in allowed:
-        raise RuntimeError(
-            f"Provider '{agent_cfg.provider_name}' is not allowed for this agent "
-            f"(allowed_providers={allowed})"
-        )
-
-
-def _apply_openai_provider_env(provider_cfg: OpenAIProviderSettings) -> None:
-    """
-    Apply provider settings to the OpenAI SDK via environment variables.
-
-    This keeps the example simple and ensures provider secrets actually affect
-    outbound calls.
-    """
-    if provider_cfg.api_key is not None:
-        os.environ["OPENAI_API_KEY"] = provider_cfg.api_key.get_secret_value()
-    if provider_cfg.base_url:
-        os.environ["OPENAI_BASE_URL"] = str(provider_cfg.base_url)
-    if provider_cfg.organization is not None:
-        os.environ["OPENAI_ORG_ID"] = provider_cfg.organization
-
-
-def build_dev_agent(
-    agent_cfg: DevAgentSettings,
-    provider_cfg: OpenAIProviderSettings,
-) -> Agent:
-    _ensure_provider_allowed(agent_cfg)
-    _apply_openai_provider_env(provider_cfg)
-
+def build_dev_agent(agent_cfg: DevAgentSettings) -> Agent:
     return Agent(
         name="Dev Agent",
         instructions=(
@@ -165,13 +119,7 @@ def build_dev_agent(
     )
 
 
-def build_test_agent(
-    agent_cfg: TestAgentSettings,
-    provider_cfg: OpenAIProviderSettings,
-) -> Agent:
-    _ensure_provider_allowed(agent_cfg)
-    _apply_openai_provider_env(provider_cfg)
-
+def build_test_agent(agent_cfg: TestAgentSettings) -> Agent:
     return Agent(
         name="Test Agent",
         instructions=(
@@ -250,8 +198,7 @@ server = WRP(
     global_input_limit_bytes=2 * 1024 * 1024,  # 2 MiB cap for all workflows
 )
 
-# Register provider + agent settings so clients can inspect/override them
-server.register_provider_settings("openai", OpenAIProviderSettings())
+# Register agent settings (providers are auto-registered by the registry)
 server.register_agent_settings("dev-agent", DevAgentSettings(), allow_override=True)
 server.register_agent_settings("test-agent", TestAgentSettings(), allow_override=True)
 
@@ -274,7 +221,8 @@ server.register_agent_settings("test-agent", TestAgentSettings(), allow_override
 async def dev_flow(wf_input: DevIn, ctx: Context) -> DevOut:
     # Use only the 'dev' channel (seed + live).
     ch = await ctx.run.conversations.get_channel(
-        "dev", "Development", "Primary channel for development work"
+        "dev", "Development", "Primary channel for development work",
+        item_type=TResponseInputItem,
     )
     # Effective workflow settings (no name needed; inferred from current workflow)
     dev_cfg = ctx.get_workflow_settings()  # -> DevWorkflowSettings instance
@@ -293,12 +241,19 @@ async def dev_flow(wf_input: DevIn, ctx: Context) -> DevOut:
             message="dev: non-default workflow settings in effect",
             level="warning",
         )
-    dev_agent = build_dev_agent(dev_agent_cfg, dev_provider_cfg)
+    dev_agent = build_dev_agent(dev_agent_cfg)
 
-    user_msg = {
-        "role": "user",
-        "content": [{"type": "input_text", "text": wf_input.prompt}],
-    }
+    user_msg: list[TResponseInputItem] = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": wf_input.prompt
+                }
+            ],
+        }
+    ]
     await ch.add_item(user_msg)
 
     await ctx.run.telemetry.annotation(
@@ -307,7 +262,9 @@ async def dev_flow(wf_input: DevIn, ctx: Context) -> DevOut:
     )
 
     dev_result_temp = await Runner.run(
-        dev_agent, input=ch.get_items(), hooks=OpenAITelemetryHooks(ctx)
+        dev_agent,
+        input=ch.get_items(),  # typed: list[TResponseInputItem]
+        hooks=OpenAITelemetryHooks(ctx),
     )
 
     # Persist + mirror assistant messages to the same handle
@@ -339,7 +296,8 @@ async def dev_flow(wf_input: DevIn, ctx: Context) -> DevOut:
 async def test_flow(wf_input: TestIn, ctx: Context) -> TestOut:
     # Primary channel for Test Agent uses only 'test' (seed + live).
     test_ch = await ctx.run.conversations.get_channel(
-        "test", "Testing", "Primary channel for test design & results"
+        "test", "Testing", "Primary channel for test design & results",
+        item_type=TResponseInputItem,
     )
     test_cfg = ctx.get_workflow_settings()  # -> TestWorkflowSettings instance
     test_agent_cfg = ctx.get_agent_settings("test-agent")
@@ -361,16 +319,16 @@ async def test_flow(wf_input: TestIn, ctx: Context) -> TestOut:
             level="warning",
         )
 
-    test_agent = build_test_agent(test_agent_cfg, test_provider_cfg)
+    test_agent = build_test_agent(test_agent_cfg)
 
-    user_test_msg = {
+    user_test_msg: TResponseInputItem = {
         "role": "user",
         "content": [
             {"type": "input_text", "text": f"TEST PROMPT:\n{wf_input.prompt}"},
             {"type": "input_text", "text": f"TEST INPUT:\n{wf_input.test_input}"},
         ],
     }
-    await test_ch.add_item(user_test_msg)
+    await test_ch.add_item([user_test_msg])  # ensure list[TResponseInputItem]
 
     await ctx.run.telemetry.annotation(
         message=f"test: starting (model={test_agent_cfg.model}, provider={test_agent_cfg.provider_name})",
@@ -379,7 +337,9 @@ async def test_flow(wf_input: TestIn, ctx: Context) -> TestOut:
     )
 
     test_result_temp = await Runner.run(
-        test_agent, input=test_ch.get_items(), hooks=OpenAITelemetryHooks(ctx)
+        test_agent,
+        input=test_ch.get_items(),  # typed: list[TResponseInputItem]
+        hooks=OpenAITelemetryHooks(ctx),
     )
 
     for item in test_result_temp.new_items:
@@ -408,7 +368,8 @@ async def test_flow(wf_input: TestIn, ctx: Context) -> TestOut:
     if repair_requested and repair_enabled:
         # Reuse dev agent with 'dev' channel (seed + live).
         dev_ch = await ctx.run.conversations.get_channel(
-            "dev", "Development", "Primary channel for development work"
+            "dev", "Development", "Primary channel for development work",
+            item_type=TResponseInputItem,
         )
         dev_agent_cfg = ctx.get_agent_settings("dev-agent")
         if dev_agent_cfg is None:
@@ -418,7 +379,7 @@ async def test_flow(wf_input: TestIn, ctx: Context) -> TestOut:
             raise RuntimeError(
                 f"Missing provider settings for '{dev_agent_cfg.provider_name}'"
             )
-        dev_agent = build_dev_agent(dev_agent_cfg, dev_provider_cfg)
+        dev_agent = build_dev_agent(dev_agent_cfg)
 
         repair_prompt = (
             "Apply a minimal, safe fix based on the following testing feedback. "
@@ -427,10 +388,17 @@ async def test_flow(wf_input: TestIn, ctx: Context) -> TestOut:
             f"=== TEST REPORT ===\n{test_report}\n\n"
             f"=== SUBJECT UNDER TEST ===\n{wf_input.test_input}\n"
         )
-        repair_user_msg = {
-            "role": "user",
-            "content": [{"type": "input_text", "text": repair_prompt}],
-        }
+        repair_user_msg: list[TResponseInputItem] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": repair_prompt
+                    }
+                ]
+            }
+        ]
         await dev_ch.add_item(repair_user_msg)
 
         await ctx.run.telemetry.annotation(
@@ -442,7 +410,9 @@ async def test_flow(wf_input: TestIn, ctx: Context) -> TestOut:
         )
 
         repair_result_temp = await Runner.run(
-            dev_agent, input=dev_ch.get_items(), hooks=OpenAITelemetryHooks(ctx)
+            dev_agent,
+            input=dev_ch.get_items(),  # typed: list[TResponseInputItem]
+            hooks=OpenAITelemetryHooks(ctx),
         )
 
         for item in repair_result_temp.new_items:

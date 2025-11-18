@@ -245,6 +245,7 @@ class PostgresStore(Store):
                 last_ts=_iso(last_ts),
                 name=None,
                 description=None,
+                item_type=None,
             )
 
     # ---- channel meta & items --------------------------------------------
@@ -258,6 +259,7 @@ class PostgresStore(Store):
                 description=r["description"],
                 itemsCount=r["items_count"],
                 lastItemTs=(_parse_iso(r["last_ts"]) if r["last_ts"] else None),
+                itemType=r.get("item_type"),
             ))
         return out
 
@@ -411,6 +413,7 @@ class PostgresStore(Store):
         channel: str,
         name: str | None = None,
         description: str | None = None,
+        item_type: str | None = None,
     ) -> None:
         # Insert-or-noop a meta row without touching counters/last_ts.
         self.conv.upsert_channel_meta(
@@ -421,4 +424,5 @@ class PostgresStore(Store):
             last_ts=None,
             name=name,
             description=description,
+            item_type=item_type,
         )

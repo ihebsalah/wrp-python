@@ -20,11 +20,17 @@ class AgentSettings(BaseModel):
 
     provider_name: str
     model: str
+    # Always-locked coarse/fine allowlists (author-defined; end-users cannot override)
+    # - allowed_providers: if present, only these providers are selectable
+    # - allowed_models:    per-provider list of allowed model names
+    allowed_providers: list[str] | None = None
+    allowed_models: dict[str, list[str]] | None = None
 
     model_config = ConfigDict(extra="allow")
 
     _override_status: bool = PrivateAttr(default=False)
-    locked: ClassVar[set[str]] = set()
+    # NEVER overrideable at runtime
+    locked: ClassVar[set[str]] = {"allowed_providers", "allowed_models"}
 
     def settings_overridden(self) -> bool:
         return bool(self._override_status)

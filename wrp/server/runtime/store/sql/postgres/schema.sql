@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS conversation_channels (
   description TEXT NULL,
   items_count INTEGER NOT NULL DEFAULT 0,
   last_ts TEXT NULL,
+  item_type TEXT NULL,
   PRIMARY KEY (system_session_id, run_id, channel),
   FOREIGN KEY (system_session_id, run_id)
     REFERENCES runs(system_session_id, run_id) ON DELETE CASCADE
