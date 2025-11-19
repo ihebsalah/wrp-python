@@ -1,5 +1,4 @@
 # tests/conftest.py
-
 import logging
 import pytest
 import anyio
@@ -31,31 +30,33 @@ def setup_test_logging(caplog):
 # ------------------------------------------------------------------------------
 
 @pytest.fixture
-def memory_channel_pair():
+async def memory_channel_pair():
     """
-    Creates a bidirectional memory stream pair to simulate a transport layer 
-    without using HTTP or Stdio.
+    Creates a bidirectional memory stream pair for testing transport layers.
     
-    This is essential for testing 'BaseSession', 'ClientSession', and 'ServerSession' 
-    in isolation (Unit tests).
+    This fixture creates two pairs of streams to simulate a full-duplex
+    connection. It uses a generator with a teardown phase to ensure that all
+    streams are closed properly after a test, preventing hangs.
 
-    Visual flow:
-      [Client Side] --(client_write)--> Stream A --(server_read)--> [Server Side]
-      [Client Side] <--(client_read)-- Stream B <--(server_write)-- [Server Side]
-
-    Returns:
-        tuple: (
-            (client_read_stream, client_write_stream), 
-            (server_read_stream, server_write_stream)
-        )
+    Yields:
+        tuple: A pair of tuples for client and server sides:
+               `((client_read, client_write), (server_read, server_write))`
     """
-    # Stream A: Traffic going TO the Server
-    server_read_stream, client_write_stream = anyio.create_memory_object_stream(100)
+    # Stream A: Traffic going TO the Server (Client writes, Server reads)
+    client_write, server_read = anyio.create_memory_object_stream(100)
     
-    # Stream B: Traffic going TO the Client
-    client_read_stream, server_write_stream = anyio.create_memory_object_stream(100)
+    # Stream B: Traffic going TO the Client (Server writes, Client reads)
+    server_write, client_read = anyio.create_memory_object_stream(100)
 
-    client_side = (client_read_stream, client_write_stream)
-    server_side = (server_read_stream, server_write_stream)
+    client_side = (client_read, client_write)
+    server_side = (server_read, server_write)
+    
+    yield client_side, server_side
 
-    return client_side, server_side
+    # Teardown: Close all streams to ensure any background tasks listening on them
+    # can exit gracefully. The timeout prevents tests from blocking indefinitely.
+    with anyio.move_on_after(1, shield=True):
+        await client_write.aclose()
+        await server_write.aclose()
+        await client_read.aclose()
+        await server_read.aclose()
