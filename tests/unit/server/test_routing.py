@@ -13,8 +13,10 @@ from wrp.types import (
     ErrorData,
     ListResourcesRequest,
     ListResourcesResult,
+    METHOD_NOT_FOUND,
     PingRequest,
     ProgressNotification,
+    ProgressNotificationParams,
     ReadResourceRequest,
     ReadResourceRequestParams,
     ReadResourceResult,
@@ -22,6 +24,7 @@ from wrp.types import (
     RunWorkflowRequestParams,
     RunWorkflowResult,
     ServerResult,
+    WorkflowDescriptor,
 )
 
 
@@ -268,3 +271,108 @@ async def test_server_context_injection():
         lifespan_context={},
         raise_exceptions=True
     )
+
+
+@pytest.mark.anyio
+async def test_server_input_validation():
+    """
+    Verifies that the Server enforces JSON schema validation when
+    validate_input=True.
+    """
+    server = Server("test-validation")
+
+    # 1. Register list_workflows to provide the schema
+    @server.list_workflows()
+    async def _list_workflows(_req: types.ListWorkflowsRequest,) -> types.ListWorkflowsResult:
+        return types.ListWorkflowsResult(workflows=[
+            WorkflowDescriptor(
+                name="strict-flow",
+                inputSchema={"type": "object", "properties": {"age": {"type": "integer"}}, "required": ["age"]},
+                outputSchema={}
+            )
+        ])
+
+    # 2. Register the workflow with validation enabled
+    @server.run_workflow(validate_input=True)
+    async def _run(name: str, input: dict):
+        return types.RunWorkflowResult(output={})
+
+    handler = server.request_handlers[RunWorkflowRequest]
+
+    # 3. Send INVALID input (string instead of integer)
+    req = RunWorkflowRequest(
+        params=RunWorkflowRequestParams(name="strict-flow", input={"age": "not-a-number"})
+    )
+
+    response = await handler(req)
+    result = response.root
+
+    # 4. Assert validation failed gracefully
+    assert isinstance(result, RunWorkflowResult)
+    assert result.isError is True
+    assert "Input validation error" in str(result.error)
+
+
+@pytest.mark.anyio
+async def test_server_method_not_found():
+    """
+    Verifies that the Server returns METHOD_NOT_FOUND for unknown request types.
+    """
+    server = Server("test-404")
+
+    # Mock the responder machinery
+    mock_responder = AsyncMock(spec=RequestResponder)
+    mock_responder.request_id = 1
+
+    # Create a request type that isn't registered
+    class UnknownRequest(ClientRequest):
+        pass
+
+    # We mock respond to capture the error
+    async def capture_response(response):
+        assert isinstance(response, ErrorData)
+        assert response.code == METHOD_NOT_FOUND
+        assert response.message == "Method not found"
+
+    mock_responder.respond = capture_response
+
+    # Invoke _handle_request with an unknown request type
+    # We pass a dummy object that isn't in server.request_handlers
+    await server._handle_request(
+        message=mock_responder,
+        req="some-unknown-object",
+        session=MagicMock(),
+        lifespan_context={},
+        raise_exceptions=False
+    )
+
+
+@pytest.mark.anyio
+async def test_server_notification_dispatch():
+    """
+    Verifies that _handle_notification correctly locates and awaits
+    the registered handler, and that the decorator unpacks arguments.
+    """
+    server = Server("test-notif-exec")
+
+    # 1. Create a mock to capture the unpacked arguments
+    mock_impl = AsyncMock()
+
+    # 2. Register via decorator to test the full chain (dispatch + unpacking)
+    @server.progress_notification()
+    async def _on_progress(token, progress, total, message):
+        await mock_impl(token, progress, total, message)
+
+    # 3. Create the notification object
+    notif = ProgressNotification(
+        params=ProgressNotificationParams(progressToken="pt", progress=0.5)
+    )
+
+    # 4. Invoke the private handler method
+    await server._handle_notification(notif)
+
+    # 5. Assert the implementation was called with unpacked params
+    mock_impl.assert_awaited_once()
+    call_args = mock_impl.call_args
+    assert call_args[0][0] == "pt"  # progressToken
+    assert call_args[0][1] == 0.5   # progress
