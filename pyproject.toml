@@ -1,12 +1,10 @@
-# pyproject.toml
-
 [build-system]
 requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "wrp-python"
-version = "0.1.0a1" # alpha/WIP tag so expectations are clear
+version = "0.1.0a1"
 description = "WRP server/runtime (WIP)"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -42,4 +40,22 @@ license-files = ["LICENSE", "NOTICE", "TRADEMARKS.md", "authors"]
 
 [project.optional-dependencies]
 dev = [
+  "pytest>=8.0.0",
+  "pytest-asyncio>=0.23.0",
+  "pytest-cov>=4.1.0",
+  "httpx>=0.28.1", 
+]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --asyncio-mode=auto"
+testpaths = [
+    "tests",
+]
+python_files = "test_*.py"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "unit: Fast tests that do not require external resources",
+    "integration: Tests that require DBs or partial environment",
+    "e2e: Slow, full-stack tests",
 ]
