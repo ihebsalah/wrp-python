@@ -48,7 +48,7 @@ dev = [
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "-ra -q --asyncio-mode=auto"
+addopts = "-ra --asyncio-mode=auto --strict-markers"
 testpaths = [
     "tests",
 ]
